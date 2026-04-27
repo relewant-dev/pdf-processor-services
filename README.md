@@ -1,6 +1,14 @@
 # smart-ide-services
 
-Backend for Smart IDE App
+[![Build](https://img.shields.io/github/actions/workflow/status/OWNER/REPO/ci.yaml?branch=main&label=build)](https://github.com/OWNER/REPO/actions/workflows/ci.yaml)
+[![Version](https://img.shields.io/github/v/release/OWNER/REPO?sort=semver)](https://github.com/OWNER/REPO/releases)
+[![License](https://img.shields.io/github/license/OWNER/REPO)](./LICENSE)
+
+> Replace `OWNER/REPO` in the badge URLs above with your GitHub repository slug (for example, `acme/smart-ide-services`).
+
+Backend for Smart IDE App.
+
+This project uses a GitHub Actions release pipeline (`.github/workflows/ci.yaml`) with Conventional Commit linting and semantic-release to automate tagging and release notes on pushes to `main`.
 
 ## Git commit hook (Conventional Commits)
 
