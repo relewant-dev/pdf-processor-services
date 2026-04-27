@@ -1,8 +1,8 @@
 # smart-ide-services
 
-[![Build](https://img.shields.io/github/actions/workflow/status/OWNER/REPO/ci.yaml?branch=main&label=build)](https://github.com/OWNER/REPO/actions/workflows/ci.yaml)
-[![Version](https://img.shields.io/github/v/release/OWNER/REPO?sort=semver)](https://github.com/OWNER/REPO/releases)
-[![License](https://img.shields.io/github/license/OWNER/REPO)](./LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/relewant-dev/smart-ide-services/ci.yaml?branch=main&label=build)](https://github.com/OWNER/REPO/actions/workflows/ci.yaml)
+[![Version](https://img.shields.io/github/v/release/relewant-dev/smart-ide-services?sort=semver)](https://github.com/relewant-dev/smart-ide-services/releases)
+[![License](https://img.shields.io/github/license/relewant-dev/smart-ide-services)](./LICENSE)
 
 > Replace `OWNER/REPO` in the badge URLs above with your GitHub repository slug (for example, `acme/smart-ide-services`).
 
