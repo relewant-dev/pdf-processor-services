@@ -1,2 +1,0 @@
-[console_scripts]
-smart-ide-service = smart_ide_services.server:main
