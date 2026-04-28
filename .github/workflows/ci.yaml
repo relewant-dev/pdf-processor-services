@@ -1,0 +1,44 @@
+name: Release & Tagging
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint Conventional Commits
+        if: github.event_name == 'pull_request'
+        uses: wagoid/commitlint-github-action@v5
+
+      - name: Ensure initial tag v0.0.0
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! git rev-parse "v0.0.0" >/dev/null 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag v0.0.0
+            git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }} v0.0.0
+          fi
+
+      - name: Semantic Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
