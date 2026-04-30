@@ -51,13 +51,46 @@ Allowed types:
 
 To evolve this service into a smart IDE backend, prefer the following architecture:
 
-- `src/server.py`: MCP bootstrap and service wiring.
+- `src/server.py`: MCP bootstrap and service wiring only.
 - `src/config.py`: environment parsing and runtime settings.
+- `src/logging_config.py`: rotating log setup.
+- `src/clients/ollama.py`: Ollama HTTP client adapter.
+- `src/tools/backend.py`: backend planning/routing tool logic.
+- `src/domain/blueprints.py`: stack blueprint registry and resolution.
 - `src/clients/`: adapters for LLM providers (starting with Ollama).
 - `src/tools/`: MCP tool definitions grouped by capability.
 - `src/prompts/`: reusable prompt templates and prompt builders.
 - `src/domain/`: core business logic and shared schemas.
 - `tests/unit` and `tests/integration`: test separation by speed and dependency.
-- `docs/`: architecture decisions, API contracts, and operator runbooks.
 
 This keeps transport concerns, provider clients, and tool logic decoupled so the platform can scale to more IDE features safely.
+
+## Testing skill routing
+
+You can validate stack skill routing and blueprint exposure locally with:
+
+```bash
+python -m compileall src tests
+pytest -q
+```
+
+Coverage includes:
+- intent routing for Java/Spring, Node/Express/TypeScript, and Python/FastAPI;
+- invalid stack intent handling;
+- blueprint list contains expected generation skills.
+
+## Rotative logs for MCP tools
+
+The MCP server now writes tool invocation logs using a rotating file handler.
+
+Environment variables:
+- `LOG_LEVEL` (default: `INFO`)
+- `LOG_FILE` (default: `smart-ide-services.log`)
+- `LOG_MAX_BYTES` (default: `1048576`)
+- `LOG_BACKUP_COUNT` (default: `5`)
+
+Example:
+
+```bash
+LOG_FILE=logs/mcp.log LOG_MAX_BYTES=2097152 LOG_BACKUP_COUNT=10 python src/server.py
+```
