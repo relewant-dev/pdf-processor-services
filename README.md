@@ -46,3 +46,18 @@ Allowed types:
 - `ci`
 - `chore`
 - `revert`
+
+## Project structure (recommended)
+
+To evolve this service into a smart IDE backend, prefer the following architecture:
+
+- `src/server.py`: MCP bootstrap and service wiring.
+- `src/config.py`: environment parsing and runtime settings.
+- `src/clients/`: adapters for LLM providers (starting with Ollama).
+- `src/tools/`: MCP tool definitions grouped by capability.
+- `src/prompts/`: reusable prompt templates and prompt builders.
+- `src/domain/`: core business logic and shared schemas.
+- `tests/unit` and `tests/integration`: test separation by speed and dependency.
+- `docs/`: architecture decisions, API contracts, and operator runbooks.
+
+This keeps transport concerns, provider clients, and tool logic decoupled so the platform can scale to more IDE features safely.
