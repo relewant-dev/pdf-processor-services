@@ -109,3 +109,16 @@ The following tools are designed to be exposed by the MCP server.
 3. Call `generate_agent_plan` for the first feature.
 4. Call `generate_tool_spec` for missing MCP capabilities.
 5. Execute scaffold tasks from `generate_backend_scaffold_tasks`.
+
+
+## 5) Document processing extension
+
+For document-heavy workflows (invoices, CVs, resumes, forms), add the following MCP tools:
+
+- `list_document_blueprint`: returns document-specific skills, agents, tools.
+- `generate_document_skill_set(document_type, compliance_mode)`: prioritized capabilities and checklist.
+- `generate_document_agent_plan(document_type, objective, constraints)`: multi-agent plan for extraction + validation.
+- `generate_document_tool_spec(capability)`: tool contract scaffold for extract/validate/redact capabilities.
+- `resolve_document_processing_flow(user_request)`: routes request to invoice, CV, or generic extraction flow.
+
+- `list_platform_blueprints`: returns both backend and document-processing blueprint catalogs in one response.
