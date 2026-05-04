@@ -7,7 +7,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from server import list_backend_blueprints, resolve_backend_skill
+from server import list_backend_blueprints, list_platform_blueprints, resolve_backend_skill
 
 
 @pytest.mark.anyio
@@ -43,3 +43,12 @@ async def test_list_backend_blueprints_contains_skills() -> None:
     assert "stacks" in data
     assert "java_spring_boot" in data["stacks"]
     assert "generate-spring-boot-java-backend" in data["stacks"]["java_spring_boot"]["skills"]
+
+
+@pytest.mark.anyio
+async def test_list_platform_blueprints_contains_backend_and_document() -> None:
+    data = await list_platform_blueprints()
+    assert "backend" in data
+    assert "document_processing" in data
+    assert "python_fastapi" in data["backend"]
+    assert "ocr-extraction" in data["document_processing"]["skills"]

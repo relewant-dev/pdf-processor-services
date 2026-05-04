@@ -82,3 +82,29 @@ def resolve_stack(stack: str) -> str:
             f"Unsupported stack '{stack}'. Use one of: {', '.join(BLUEPRINTS.keys())}"
         )
     return key
+
+
+DOCUMENT_BLUEPRINT: dict[str, list[str]] = {
+    "skills": [
+        "document-classification",
+        "ocr-extraction",
+        "structured-data-mapping",
+        "pii-redaction",
+        "document-validation",
+        "fraud-signals-detection",
+        "document-processing-observability",
+    ],
+    "agents": [
+        "document-intake-agent",
+        "document-extraction-agent",
+        "document-validation-agent",
+        "document-review-agent",
+    ],
+    "tools": [
+        "list_document_blueprint",
+        "generate_document_skill_set",
+        "generate_document_agent_plan",
+        "generate_document_tool_spec",
+        "resolve_document_processing_flow",
+    ],
+}
