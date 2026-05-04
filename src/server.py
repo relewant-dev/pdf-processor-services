@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from clients.ollama import chat_with_ollama, ollama_health
 from config import SERVICE_NAME
