@@ -10,94 +10,19 @@ from config import SERVICE_NAME
 from logging_config import get_logger
 from tools.backend import (
     generate_agent_plan_tool,
+    generate_document_agent_plan_tool,
+    generate_document_skill_set_tool,
+    generate_document_tool_spec_tool,
     generate_skill_set_tool,
     list_backend_blueprints_tool,
+    list_document_blueprint_tool,
+    list_platform_blueprints_tool,
     resolve_backend_skill_tool,
+    resolve_document_processing_flow_tool,
 )
 
 mcp = FastMCP(name=SERVICE_NAME, mask_error_details=True)
 logger = get_logger()
-
-BLUEPRINTS: dict[str, dict[str, list[str]]] = {
-    "java_spring_boot": {
-        "skills": [
-            "api-design",
-            "auth-security",
-            "data-modeling",
-            "testing-strategy",
-            "observability",
-            "spring-api-implementation",
-            "generate-spring-boot-java-backend",
-            "spring-data-jpa",
-            "spring-boot-hardening",
-        ],
-        "agents": [
-            "backend-architect-agent",
-            "spring-implementation-agent",
-            "backend-review-agent",
-        ],
-    },
-    "node_express_typescript": {
-        "skills": [
-            "api-design",
-            "auth-security",
-            "data-modeling",
-            "testing-strategy",
-            "observability",
-            "express-route-architecture",
-            "generate-express-typescript-backend",
-            "typescript-domain-modeling",
-            "node-runtime-reliability",
-        ],
-        "agents": [
-            "backend-architect-agent",
-            "express-ts-implementation-agent",
-            "backend-review-agent",
-        ],
-    },
-    "python_fastapi": {
-        "skills": [
-            "api-design",
-            "auth-security",
-            "data-modeling",
-            "testing-strategy",
-            "observability",
-            "fastapi-endpoint-design",
-            "generate-fastapi-python-backend",
-            "fastapi-async-io",
-            "python-service-operations",
-        ],
-        "agents": [
-            "backend-architect-agent",
-            "fastapi-implementation-agent",
-            "backend-review-agent",
-        ],
-    },
-}
-
-
-def _normalize_stack(stack: str) -> str:
-    return stack.strip().lower().replace("-", "_").replace(" ", "_")
-
-
-def _resolve_stack(stack: str) -> str:
-    key = _normalize_stack(stack)
-    aliases = {
-        "java": "java_spring_boot",
-        "spring_boot": "java_spring_boot",
-        "nodejs": "node_express_typescript",
-        "node": "node_express_typescript",
-        "express": "node_express_typescript",
-        "typescript": "node_express_typescript",
-        "python": "python_fastapi",
-        "fastapi": "python_fastapi",
-    }
-    key = aliases.get(key, key)
-    if key not in BLUEPRINTS:
-        raise ToolError(
-            f"Unsupported stack '{stack}'. Use one of: {', '.join(BLUEPRINTS.keys())}"
-        )
-    return key
 
 
 @mcp.tool(description="Send a user prompt to local Ollama and return the model output.")
@@ -125,9 +50,7 @@ async def generate_skill_set(stack: str, project_type: str = "api") -> dict[str,
 
 
 @mcp.tool(description="Generate an agent execution plan for a backend feature.")
-async def generate_agent_plan(
-    stack: str, feature_summary: str, constraints: str = ""
-) -> dict[str, Any]:
+async def generate_agent_plan(stack: str, feature_summary: str, constraints: str = "") -> dict[str, Any]:
     logger.info("Tool generate_agent_plan called for stack=%s", stack)
     return generate_agent_plan_tool(stack, feature_summary, constraints)
 
@@ -138,89 +61,44 @@ async def resolve_backend_skill(user_request: str) -> dict[str, str]:
     return resolve_backend_skill_tool(user_request)
 
 
-@mcp.tool(description="List supported backend blueprints, skills, and agents.")
-async def list_backend_blueprints() -> dict[str, Any]:
-    """Return supported backend stacks and their skill/agent bundles."""
-    return {"stacks": BLUEPRINTS}
 
 
-@mcp.tool(description="Generate a prioritized skill set for a backend stack.")
-async def generate_skill_set(stack: str, project_type: str = "api") -> dict[str, Any]:
-    """Return recommended skill ordering for a selected stack."""
-    stack_key = _resolve_stack(stack)
-    skills = BLUEPRINTS[stack_key]["skills"]
-    return {
-        "stack": stack_key,
-        "project_type": project_type,
-        "priority_skills": skills,
-        "checklist": [
-            "Define API contract and error schema",
-            "Set auth/security and validation rules",
-            "Implement observability and health endpoints",
-            "Create unit and integration tests",
-        ],
-    }
+@mcp.tool(description="List all platform blueprints (backend + document processing).")
+async def list_platform_blueprints() -> dict[str, Any]:
+    logger.info("Tool list_platform_blueprints called")
+    return list_platform_blueprints_tool()
 
 
-@mcp.tool(description="Generate an agent execution plan for a backend feature.")
-async def generate_agent_plan(
-    stack: str, feature_summary: str, constraints: str = ""
-) -> dict[str, Any]:
-    """Return a role-based implementation plan for a feature request."""
-    if not feature_summary.strip():
-        raise ToolError("feature_summary must not be empty.")
-
-    stack_key = _resolve_stack(stack)
-    agents = BLUEPRINTS[stack_key]["agents"]
-    return {
-        "stack": stack_key,
-        "feature_summary": feature_summary,
-        "constraints": constraints,
-        "plan": [
-            {"step": 1, "agent": agents[0], "task": "Design architecture and contracts"},
-            {"step": 2, "agent": agents[1], "task": "Implement feature modules and tests"},
-            {"step": 3, "agent": agents[2], "task": "Run review checklist and release readiness"},
-        ],
-    }
+@mcp.tool(description="List document-processing skills, agents, and tools.")
+async def list_document_blueprint() -> dict[str, Any]:
+    logger.info("Tool list_document_blueprint called")
+    return list_document_blueprint_tool()
 
 
-@mcp.tool(description="Resolve a user request to a recommended backend generation skill.")
-async def resolve_backend_skill(user_request: str) -> dict[str, str]:
-    """Map plain-language requests to a stack-specific backend generation skill."""
-    text = user_request.strip().lower()
-    if not text:
-        raise ToolError("user_request must not be empty.")
+@mcp.tool(description="Generate a prioritized document-processing skill set.")
+async def generate_document_skill_set(document_type: str, compliance_mode: str = "standard") -> dict[str, Any]:
+    logger.info("Tool generate_document_skill_set called for document_type=%s compliance_mode=%s", document_type, compliance_mode)
+    return generate_document_skill_set_tool(document_type, compliance_mode)
 
-    if "java" in text or "spring" in text:
-        return {
-            "stack": "java_spring_boot",
-            "skill": "generate-spring-boot-java-backend",
-            "reason": "Detected Java/Spring intent.",
-        }
-    if "node" in text or "express" in text or "typescript" in text:
-        return {
-            "stack": "node_express_typescript",
-            "skill": "generate-express-typescript-backend",
-            "reason": "Detected Node/Express/TypeScript intent.",
-        }
-    if "python" in text or "fastapi" in text:
-        return {
-            "stack": "python_fastapi",
-            "skill": "generate-fastapi-python-backend",
-            "reason": "Detected Python/FastAPI intent.",
-        }
 
-    raise ToolError("Could not infer stack. Mention Java, Node/Express/TypeScript, or Python/FastAPI.")
+@mcp.tool(description="Generate an agent execution plan for document processing.")
+async def generate_document_agent_plan(document_type: str, objective: str, constraints: str = "") -> dict[str, Any]:
+    logger.info("Tool generate_document_agent_plan called for document_type=%s", document_type)
+    return generate_document_agent_plan_tool(document_type, objective, constraints)
+
+
+@mcp.tool(description="Generate a tool contract for a document processing capability.")
+async def generate_document_tool_spec(capability: str) -> dict[str, Any]:
+    logger.info("Tool generate_document_tool_spec called for capability=%s", capability)
+    return generate_document_tool_spec_tool(capability)
+
+
+@mcp.tool(description="Resolve a request to a recommended document-processing flow.")
+async def resolve_document_processing_flow(user_request: str) -> dict[str, str]:
+    logger.info("Tool resolve_document_processing_flow called")
+    return resolve_document_processing_flow_tool(user_request)
 
 
 @mcp.prompt
 def chat_prompt(user_message: str) -> str:
     return f"User message: {user_message}"
-
-
-def main() -> None:
-    mcp.run()
-
-
-if __name__ == "__main__":
-    main()
