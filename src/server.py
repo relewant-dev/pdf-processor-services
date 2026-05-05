@@ -20,6 +20,7 @@ from tools.backend import (
     resolve_backend_skill_tool,
     resolve_document_processing_flow_tool,
 )
+from tools.document import build_document_prompt, extract_pdf_text
 
 mcp = FastMCP(name=SERVICE_NAME, mask_error_details=True)
 logger = get_logger()
@@ -28,6 +29,14 @@ logger = get_logger()
 @mcp.tool(description="Send a user prompt to local Ollama and return the model output.")
 async def send_prompt(prompt: str) -> str:
     logger.info("Tool send_prompt called")
+    return await chat_with_ollama(prompt)
+
+
+@mcp.tool(description="Extract text from a PDF file and answer a question using local Ollama.")
+async def process_pdf(file_path: str, question: str) -> str:
+    logger.info("Tool process_pdf called for file_path=%s", file_path)
+    document_text = extract_pdf_text(file_path)
+    prompt = build_document_prompt(document_text, question)
     return await chat_with_ollama(prompt)
 
 
