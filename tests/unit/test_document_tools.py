@@ -1,49 +1,43 @@
-from __future__ import annotations
-
-import sys
 from pathlib import Path
 
 import pytest
 from fastmcp.exceptions import ToolError
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
-from server import (
-    generate_document_agent_plan,
-    generate_document_skill_set,
-    generate_document_tool_spec,
-    list_document_blueprint,
-    resolve_document_processing_flow,
-)
+from tools.document import build_document_prompt, extract_pdf_text, truncate_document_text
 
 
-@pytest.mark.anyio
-async def test_list_document_blueprint_contains_invoice_tools() -> None:
-    data = await list_document_blueprint()
-    assert "document_processing" in data
-    assert "generate_document_skill_set" in data["document_processing"]["tools"]
+def test_build_document_prompt_contains_question_and_document() -> None:
+    prompt = build_document_prompt("Document text", "What is this?")
+
+    assert "What is this?" in prompt
+    assert "Document text" in prompt
 
 
-@pytest.mark.anyio
-async def test_generate_document_skill_set_invoice() -> None:
-    result = await generate_document_skill_set("invoice")
-    assert result["document_type"] == "invoice"
-    assert "ocr-extraction" in result["priority_skills"]
+def test_extract_pdf_text_raises_for_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.pdf"
+
+    with pytest.raises(ToolError, match="File not found"):
+        extract_pdf_text(str(missing))
 
 
-@pytest.mark.anyio
-async def test_generate_document_agent_plan_requires_objective() -> None:
-    with pytest.raises(ToolError):
-        await generate_document_agent_plan("invoice", "")
+def test_extract_pdf_text_raises_for_non_pdf(tmp_path: Path) -> None:
+    txt_file = tmp_path / "notes.txt"
+    txt_file.write_text("hello", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="Expected a PDF file"):
+        extract_pdf_text(str(txt_file))
 
 
-@pytest.mark.anyio
-async def test_generate_document_tool_spec_extract() -> None:
-    result = await generate_document_tool_spec("extract")
-    assert result["name"] == "extract_document_fields"
-    assert "error_guidance" in result
+def test_truncate_document_text_no_truncation_when_short() -> None:
+    text = "short text"
+
+    assert truncate_document_text(text, max_chars=100) == text
 
 
-@pytest.mark.anyio
-async def test_resolve_document_processing_flow_cv() -> None:
-    result = await resolve_document_processing_flow("parse this curriculum vitae into json")
-    assert result["flow"] == "candidate_profile_extraction"
+def test_truncate_document_text_truncates_with_notice() -> None:
+    text = "x" * 200
+
+    truncated = truncate_document_text(text, max_chars=80)
+
+    assert len(truncated) <= 80
+    assert "Document truncated due to length" in truncated
