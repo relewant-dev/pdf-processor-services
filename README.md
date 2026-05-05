@@ -94,3 +94,18 @@ Example:
 ```bash
 LOG_FILE=logs/mcp.log LOG_MAX_BYTES=2097152 LOG_BACKUP_COUNT=10 python src/server.py
 ```
+
+## PDF processing and Ollama timeout tuning
+
+The `process_pdf` MCP tool sends extracted PDF text to Ollama. Large PDFs may take longer to complete.
+
+Environment variables:
+- `OLLAMA_TIMEOUT_SECONDS` (default: `300`)
+
+Example:
+
+```bash
+OLLAMA_TIMEOUT_SECONDS=600 python src/server.py
+```
+
+If you still get timeouts, try reducing prompt size by passing `max_chars` in `process_pdf`.

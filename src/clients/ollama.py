@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 from fastmcp.exceptions import ToolError
 
-from config import OLLAMA_MODEL, OLLAMA_URL
+from config import OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL
 
 
 async def chat_with_ollama(prompt: str) -> str:
@@ -19,10 +19,15 @@ async def chat_with_ollama(prompt: str) -> str:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
             response = await client.post(f"{OLLAMA_URL}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()
+    except httpx.ReadTimeout as exc:
+        raise ToolError(
+            f"Ollama timed out after {OLLAMA_TIMEOUT_SECONDS:.0f}s. "
+            "Try a smaller document, a faster model, or increase OLLAMA_TIMEOUT_SECONDS."
+        ) from exc
     except httpx.HTTPError as exc:
         raise ToolError(
             f"Failed to reach Ollama at {OLLAMA_URL}. Ensure 'ollama serve' is running."
