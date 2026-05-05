@@ -20,7 +20,7 @@ from tools.backend import (
     resolve_backend_skill_tool,
     resolve_document_processing_flow_tool,
 )
-from tools.document import build_document_prompt, extract_pdf_text
+from tools.document import build_document_prompt, extract_pdf_text, truncate_document_text
 
 mcp = FastMCP(name=SERVICE_NAME, mask_error_details=True)
 logger = get_logger()
@@ -33,10 +33,11 @@ async def send_prompt(prompt: str) -> str:
 
 
 @mcp.tool(description="Extract text from a PDF file and answer a question using local Ollama.")
-async def process_pdf(file_path: str, question: str) -> str:
+async def process_pdf(file_path: str, question: str, max_chars: int = 30000) -> str:
     logger.info("Tool process_pdf called for file_path=%s", file_path)
     document_text = extract_pdf_text(file_path)
-    prompt = build_document_prompt(document_text, question)
+    truncated_text = truncate_document_text(document_text, max_chars=max_chars)
+    prompt = build_document_prompt(truncated_text, question)
     return await chat_with_ollama(prompt)
 
 

@@ -41,3 +41,19 @@ def build_document_prompt(document_text: str, question: str) -> str:
         "Document content:\n"
         f"{document_text}"
     )
+
+
+def truncate_document_text(document_text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        raise ToolError("max_chars must be greater than 0")
+
+    cleaned = document_text.strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    truncated_notice = "\n\n[Document truncated due to length before model call.]"
+    allowed_length = max_chars - len(truncated_notice)
+    if allowed_length <= 0:
+        raise ToolError("max_chars is too small to include truncation metadata")
+
+    return f"{cleaned[:allowed_length].rstrip()}{truncated_notice}"
