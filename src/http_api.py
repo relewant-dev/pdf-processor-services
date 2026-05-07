@@ -63,11 +63,7 @@ else:
     from starlette.routing import Route
 
     from routers.prompt import router as prompt_router
-    from services.prompt_router import (
-        PromptExecutionRequest,
-        PromptExecutionResponse,
-        PromptRoute,
-    )
+    from services.prompt_router import PromptExecutionRequest, PromptExecutionResponse
 
     def build_openapi_schema() -> dict[str, Any]:
         return {
@@ -78,36 +74,10 @@ else:
                 "description": "HTTP API for frontend prompt routing and execution.",
             },
             "paths": {
-                "/api/prompts/route": {
-                    "get": {
-                        "tags": ["prompts"],
-                        "summary": "Route a frontend prompt to the recommended tool.",
-                        "parameters": [
-                            {
-                                "name": "prompt",
-                                "in": "query",
-                                "required": True,
-                                "description": "Prompt message from the frontend.",
-                                "schema": {"type": "string", "minLength": 1},
-                            }
-                        ],
-                        "responses": {
-                            "200": {
-                                "description": "Recommended prompt route.",
-                                "content": {
-                                    "application/json": {
-                                        "schema": {"$ref": "#/components/schemas/PromptRoute"}
-                                    }
-                                },
-                            },
-                            "400": {"description": "Invalid prompt."},
-                        },
-                    }
-                },
                 "/api/prompts/execute": {
                     "post": {
                         "tags": ["prompts"],
-                        "summary": "Execute a frontend prompt using the inferred or requested tool.",
+                        "summary": "Route and execute a frontend message using the inferred tool.",
                         "requestBody": {
                             "required": True,
                             "content": {
@@ -137,9 +107,6 @@ else:
             },
             "components": {
                 "schemas": {
-                    "PromptRoute": PromptRoute.model_json_schema(
-                        ref_template="#/components/schemas/{model}"
-                    ),
                     "PromptExecutionRequest": PromptExecutionRequest.model_json_schema(
                         ref_template="#/components/schemas/{model}"
                     ),
@@ -184,7 +151,6 @@ else:
             {
                 "service": SERVICE_NAME,
                 "routes": [
-                    "GET /api/prompts/route?prompt=...",
                     "POST /api/prompts/execute",
                 ],
                 "docs": "Open Swagger UI at /docs or fetch the OpenAPI schema at /openapi.json.",

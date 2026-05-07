@@ -9,21 +9,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route, Router
 from starlette.status import HTTP_400_BAD_REQUEST
 
-from services.prompt_router import (
-    PromptExecutionRequest,
-    execute_prompt_tool,
-    route_prompt,
-)
-
-
-async def get_prompt_route(request: Request) -> Response:
-    prompt = request.query_params.get("prompt", "")
-    try:
-        route = route_prompt(prompt)
-    except ToolError as exc:
-        return JSONResponse({"detail": str(exc)}, status_code=HTTP_400_BAD_REQUEST)
-
-    return JSONResponse(route.model_dump())
+from services.prompt_router import PromptExecutionRequest, execute_prompt_tool
 
 
 async def post_prompt_execute(request: Request) -> Response:
@@ -45,8 +31,5 @@ async def post_prompt_execute(request: Request) -> Response:
 
 
 router = Router(
-    routes=[
-        Route("/api/prompts/route", get_prompt_route, methods=["GET"]),
-        Route("/api/prompts/execute", post_prompt_execute, methods=["POST"]),
-    ]
+    routes=[Route("/api/prompts/execute", post_prompt_execute, methods=["POST"])]
 )

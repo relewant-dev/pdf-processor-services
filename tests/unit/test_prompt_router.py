@@ -42,26 +42,24 @@ async def test_execute_prompt_tool_calls_inferred_backend_tool() -> None:
 
 
 @pytest.mark.anyio
-async def test_execute_prompt_tool_calls_explicit_document_tool() -> None:
+async def test_execute_prompt_tool_accepts_frontend_message_alias() -> None:
     response = await execute_prompt_tool(
-        PromptExecutionRequest(
-            prompt="I need redaction support",
-            tool_name="generate_document_tool_spec",
-            arguments={"capability": "redact"},
+        PromptExecutionRequest.model_validate(
+            {"message": "I need redaction support for a document"}
         )
     )
 
-    assert response.tool_name == "generate_document_tool_spec"
-    assert response.result["name"] == "redact_document"
+    assert response.prompt == "I need redaction support for a document"
+    assert response.tool_name == "resolve_document_processing_flow"
+    assert response.result["flow"] == "generic_structured_extraction"
 
 
-def test_get_prompt_route_endpoint() -> None:
+def test_get_prompt_route_endpoint_is_removed() -> None:
     client = TestClient(create_app())
 
     response = client.get("/api/prompts/route", params={"prompt": "Need a Java backend"})
 
-    assert response.status_code == 200
-    assert response.json()["tool_name"] == "resolve_backend_skill"
+    assert response.status_code == 404
 
 
 def test_post_prompt_execute_endpoint() -> None:
@@ -69,7 +67,7 @@ def test_post_prompt_execute_endpoint() -> None:
 
     response = client.post(
         "/api/prompts/execute",
-        json={"prompt": "Process a resume document"},
+        json={"message": "Process a resume document"},
     )
 
     assert response.status_code == 200
@@ -96,7 +94,7 @@ def test_openapi_schema_documents_prompt_routes() -> None:
     assert response.status_code == 200
     schema = response.json()
     assert schema["openapi"].startswith("3.")
-    assert "/api/prompts/route" in schema["paths"]
+    assert "/api/prompts/route" not in schema["paths"]
     assert "/api/prompts/execute" in schema["paths"]
     assert "PromptExecutionRequest" in schema["components"]["schemas"]
 
