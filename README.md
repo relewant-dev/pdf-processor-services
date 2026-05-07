@@ -109,3 +109,52 @@ OLLAMA_TIMEOUT_SECONDS=600 python src/server.py
 ```
 
 If you still get timeouts, try reducing prompt size by passing `max_chars` in `process_pdf`.
+
+## Frontend prompt router API
+
+The HTTP API exposes a single POST prompt execution endpoint. The frontend sends only the user message in the JSON body as `{"message":"prompt"}`. The service routes that message to the correct backend, document, health, or general chat tool, uses the inferred tool and related skills as Ollama context, and returns only the model answer as `{"response":"result of the prompt"}`.
+
+### Run the HTTP API locally
+
+Install the project dependencies, then start Uvicorn from the repository root using the same Python environment:
+
+```bash
+python -m pip install -e .
+python -m uvicorn http_api:app --app-dir src --reload
+```
+
+Using `python -m uvicorn` helps avoid accidentally running a globally installed Uvicorn that cannot see this project's installed dependencies. If startup reports `Missing HTTP API dependency: starlette`, reinstall the project dependencies in the Python environment that launches Uvicorn:
+
+```bash
+python -m pip install -e .
+```
+
+A route summary is available at `http://127.0.0.1:8000/`. Swagger UI is available at `http://127.0.0.1:8000/docs`, and the OpenAPI schema is available at `http://127.0.0.1:8000/openapi.json`.
+
+
+### Test with Swagger UI `/docs`
+
+Yes. After starting Uvicorn, open `http://127.0.0.1:8000/docs` in your browser. You can expand:
+
+- `POST /api/prompts/execute`, click **Try it out**, use a JSON body such as `{"message":"Process an invoice document"}`, and execute it.
+
+The Swagger page is backed by `http://127.0.0.1:8000/openapi.json`.
+
+### POST `/api/prompts/execute`
+
+Use this endpoint when the frontend wants the API to route a user message and execute it by calling the inferred tool.
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/prompts/execute" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Process an invoice document"}'
+```
+
+The router chooses the tool from the message content. The request body must contain only the `message` field, and successful responses contain only the `response` field with the Ollama model result.
+
+Router validation is covered by unit tests and can be checked with:
+
+```bash
+python -m compileall src tests
+pytest -q
+```
