@@ -112,7 +112,7 @@ If you still get timeouts, try reducing prompt size by passing `max_chars` in `p
 
 ## Frontend prompt router API
 
-The HTTP API exposes prompt routing endpoints that a frontend can call before or during prompt execution.
+The HTTP API exposes a single POST prompt execution endpoint. The frontend sends the user message in the JSON body, and the service routes that message to the correct backend, document, health, or general chat tool before returning the tool result.
 
 ### Run the HTTP API locally
 
@@ -136,47 +136,21 @@ A route summary is available at `http://127.0.0.1:8000/`. Swagger UI is availabl
 
 Yes. After starting Uvicorn, open `http://127.0.0.1:8000/docs` in your browser. You can expand:
 
-- `GET /api/prompts/route`, click **Try it out**, enter a prompt such as `Create a Python FastAPI backend`, and execute it.
-- `POST /api/prompts/execute`, click **Try it out**, use a JSON body such as `{"prompt":"Process an invoice document"}`, and execute it.
+- `POST /api/prompts/execute`, click **Try it out**, use a JSON body such as `{"message":"Process an invoice document"}`, and execute it.
 
 The Swagger page is backed by `http://127.0.0.1:8000/openapi.json`.
 
-### GET `/api/prompts/route`
-
-Use this endpoint when the frontend has a prompt and wants to know which backend tool should handle it.
-
-```bash
-curl "http://127.0.0.1:8000/api/prompts/route?prompt=Create%20a%20Python%20FastAPI%20backend"
-```
-
-Example response:
-
-```json
-{
-  "prompt": "Create a Python FastAPI backend",
-  "category": "backend",
-  "tool_name": "resolve_backend_skill",
-  "reason": "Detected backend-generation intent."
-}
-```
-
 ### POST `/api/prompts/execute`
 
-Use this endpoint when the frontend wants the API to execute the prompt by calling the inferred tool.
+Use this endpoint when the frontend wants the API to route a user message and execute it by calling the inferred tool.
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/prompts/execute" \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Process an invoice document"}'
+  -d '{"message":"Process an invoice document"}'
 ```
 
-You can also force a specific supported tool with `tool_name` and pass tool-specific `arguments`:
-
-```bash
-curl -X POST "http://127.0.0.1:8000/api/prompts/execute" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"Create a document tool","tool_name":"generate_document_tool_spec","arguments":{"capability":"redact"}}'
-```
+The router chooses the tool from the message content. For compatibility with older callers, the body may use `prompt` instead of `message`, but clients should prefer `message`.
 
 Router validation is covered by unit tests and can be checked with:
 

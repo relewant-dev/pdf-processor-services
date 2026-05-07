@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Literal
 
 from fastmcp.exceptions import ToolError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from clients.ollama import chat_with_ollama, ollama_health
 from tools.backend import (
@@ -32,8 +32,12 @@ class PromptRoute(BaseModel):
 class PromptExecutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    prompt: str = Field(..., min_length=1)
-    tool_name: str | None = None
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        validation_alias=AliasChoices("message", "prompt"),
+        description="Frontend message to route and execute with the inferred tool.",
+    )
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -123,7 +127,7 @@ async def execute_prompt_tool(
     request: PromptExecutionRequest,
 ) -> PromptExecutionResponse:
     route = route_prompt(request.prompt)
-    tool_name = request.tool_name or route.tool_name
+    tool_name = route.tool_name
     arguments = dict(request.arguments)
 
     result = await _execute_tool(tool_name, request.prompt, arguments)
