@@ -116,11 +116,17 @@ The HTTP API exposes prompt routing endpoints that a frontend can call before or
 
 ### Run the HTTP API locally
 
-Install the project dependencies, then start Uvicorn from the repository root:
+Install the project dependencies, then start Uvicorn from the repository root using the same Python environment:
 
 ```bash
 python -m pip install -e .
-uvicorn http_api:app --app-dir src --reload
+python -m uvicorn http_api:app --app-dir src --reload
+```
+
+Using `python -m uvicorn` helps avoid accidentally running a globally installed Uvicorn that cannot see this project's installed dependencies. If startup reports `Missing HTTP API dependency: starlette`, reinstall the project dependencies in the Python environment that launches Uvicorn:
+
+```bash
+python -m pip install -e .
 ```
 
 A route summary is available at `http://127.0.0.1:8000/`. Swagger UI is available at `http://127.0.0.1:8000/docs`, and the OpenAPI schema is available at `http://127.0.0.1:8000/openapi.json`.

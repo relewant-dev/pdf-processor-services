@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 
 import pytest
-from starlette.testclient import TestClient
 from fastmcp.exceptions import ToolError
+from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from http_api import create_app
@@ -99,3 +99,31 @@ def test_openapi_schema_documents_prompt_routes() -> None:
     assert "/api/prompts/route" in schema["paths"]
     assert "/api/prompts/execute" in schema["paths"]
     assert "PromptExecutionRequest" in schema["components"]["schemas"]
+
+
+def test_http_dependency_checker_reports_missing_modules() -> None:
+    from http_api import get_missing_http_dependencies
+
+    assert get_missing_http_dependencies(("missing_smart_ide_http_dependency",)) == (
+        "missing_smart_ide_http_dependency",
+    )
+
+
+@pytest.mark.anyio
+async def test_missing_dependency_asgi_returns_setup_guidance() -> None:
+    from http_api import MissingDependencyASGI
+
+    sent_messages = []
+
+    async def receive() -> dict[str, str]:
+        return {"type": "http.request"}
+
+    async def send(message: dict[str, object]) -> None:
+        sent_messages.append(message)
+
+    app = MissingDependencyASGI(("starlette",))
+
+    await app({"type": "http"}, receive, send)
+
+    assert sent_messages[0]["status"] == 503
+    assert b"python -m pip install -e ." in sent_messages[1]["body"]
