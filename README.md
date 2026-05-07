@@ -109,3 +109,72 @@ OLLAMA_TIMEOUT_SECONDS=600 python src/server.py
 ```
 
 If you still get timeouts, try reducing prompt size by passing `max_chars` in `process_pdf`.
+
+## Frontend prompt router API
+
+The HTTP API exposes prompt routing endpoints that a frontend can call before or during prompt execution.
+
+### Run the HTTP API locally
+
+Install the project dependencies, then start Uvicorn from the repository root:
+
+```bash
+python -m pip install -e .
+uvicorn http_api:app --app-dir src --reload
+```
+
+A route summary is available at `http://127.0.0.1:8000/`. Swagger UI is available at `http://127.0.0.1:8000/docs`, and the OpenAPI schema is available at `http://127.0.0.1:8000/openapi.json`.
+
+
+### Test with Swagger UI `/docs`
+
+Yes. After starting Uvicorn, open `http://127.0.0.1:8000/docs` in your browser. You can expand:
+
+- `GET /api/prompts/route`, click **Try it out**, enter a prompt such as `Create a Python FastAPI backend`, and execute it.
+- `POST /api/prompts/execute`, click **Try it out**, use a JSON body such as `{"prompt":"Process an invoice document"}`, and execute it.
+
+The Swagger page is backed by `http://127.0.0.1:8000/openapi.json`.
+
+### GET `/api/prompts/route`
+
+Use this endpoint when the frontend has a prompt and wants to know which backend tool should handle it.
+
+```bash
+curl "http://127.0.0.1:8000/api/prompts/route?prompt=Create%20a%20Python%20FastAPI%20backend"
+```
+
+Example response:
+
+```json
+{
+  "prompt": "Create a Python FastAPI backend",
+  "category": "backend",
+  "tool_name": "resolve_backend_skill",
+  "reason": "Detected backend-generation intent."
+}
+```
+
+### POST `/api/prompts/execute`
+
+Use this endpoint when the frontend wants the API to execute the prompt by calling the inferred tool.
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/prompts/execute" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Process an invoice document"}'
+```
+
+You can also force a specific supported tool with `tool_name` and pass tool-specific `arguments`:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/prompts/execute" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Create a document tool","tool_name":"generate_document_tool_spec","arguments":{"capability":"redact"}}'
+```
+
+Router validation is covered by unit tests and can be checked with:
+
+```bash
+python -m compileall src tests
+pytest -q
+```
