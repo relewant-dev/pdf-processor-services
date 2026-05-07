@@ -112,7 +112,7 @@ If you still get timeouts, try reducing prompt size by passing `max_chars` in `p
 
 ## Frontend prompt router API
 
-The HTTP API exposes a single POST prompt execution endpoint. The frontend sends the user message in the JSON body, and the service routes that message to the correct backend, document, health, or general chat tool before returning the tool result.
+The HTTP API exposes a single POST prompt execution endpoint. The frontend sends only the user message in the JSON body as `{"message":"prompt"}`. The service routes that message to the correct backend, document, health, or general chat tool, uses the inferred tool and related skills as Ollama context, and returns only the model answer as `{"response":"result of the prompt"}`.
 
 ### Run the HTTP API locally
 
@@ -150,7 +150,7 @@ curl -X POST "http://127.0.0.1:8000/api/prompts/execute" \
   -d '{"message":"Process an invoice document"}'
 ```
 
-The router chooses the tool from the message content. For compatibility with older callers, the body may use `prompt` instead of `message`, but clients should prefer `message`.
+The router chooses the tool from the message content. The request body must contain only the `message` field, and successful responses contain only the `response` field with the Ollama model result.
 
 Router validation is covered by unit tests and can be checked with:
 

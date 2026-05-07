@@ -71,13 +71,13 @@ else:
             "info": {
                 "title": SERVICE_NAME,
                 "version": "0.1.0",
-                "description": "HTTP API for frontend prompt routing and execution.",
+                "description": "HTTP API for frontend prompt routing with Ollama-only answers.",
             },
             "paths": {
                 "/api/prompts/execute": {
                     "post": {
                         "tags": ["prompts"],
-                        "summary": "Route and execute a frontend message using the inferred tool.",
+                        "summary": "Route a frontend message, enrich Ollama with the inferred tool, and return only the answer.",
                         "requestBody": {
                             "required": True,
                             "content": {
@@ -90,7 +90,7 @@ else:
                         },
                         "responses": {
                             "200": {
-                                "description": "Prompt execution result.",
+                                "description": "Ollama prompt response.",
                                 "content": {
                                     "application/json": {
                                         "schema": {
