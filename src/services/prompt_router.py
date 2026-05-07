@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Literal
 
 from fastmcp.exceptions import ToolError
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from clients.ollama import chat_with_ollama, ollama_health
 from tools.backend import (
@@ -32,26 +33,21 @@ class PromptRoute(BaseModel):
 class PromptExecutionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    prompt: str = Field(
+    message: str = Field(
         ...,
         min_length=1,
-        validation_alias=AliasChoices("message", "prompt"),
-        description="Frontend message to route and execute with the inferred tool.",
+        description="Frontend message to route, enrich with the inferred tool, and answer with Ollama.",
     )
-    arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class PromptExecutionResponse(BaseModel):
-    prompt: str
-    tool_name: str
-    arguments: dict[str, Any]
-    result: Any
+    response: str
 
 
 def route_prompt(prompt: str) -> PromptRoute:
     text = prompt.strip().lower()
     if not text:
-        raise ToolError("prompt must not be empty.")
+        raise ToolError("message must not be empty.")
 
     if any(token in text for token in ("health", "status", "ollama", "reachable")):
         return PromptRoute(
@@ -126,17 +122,29 @@ def _required_argument(arguments: dict[str, Any], name: str) -> Any:
 async def execute_prompt_tool(
     request: PromptExecutionRequest,
 ) -> PromptExecutionResponse:
-    route = route_prompt(request.prompt)
-    tool_name = route.tool_name
-    arguments = dict(request.arguments)
+    route = route_prompt(request.message)
 
-    result = await _execute_tool(tool_name, request.prompt, arguments)
+    if route.tool_name == "send_prompt":
+        model_prompt = request.message
+    else:
+        tool_result = await _execute_tool(route.tool_name, request.message, {})
+        model_prompt = _build_model_prompt(request.message, route, tool_result)
 
-    return PromptExecutionResponse(
-        prompt=request.prompt,
-        tool_name=tool_name,
-        arguments=arguments,
-        result=result,
+    model_result = await chat_with_ollama(model_prompt)
+    return PromptExecutionResponse(response=model_result)
+
+
+def _build_model_prompt(prompt: str, route: PromptRoute, tool_result: Any) -> str:
+    tool_context = json.dumps(tool_result, indent=2, sort_keys=True)
+    return (
+        "Answer the user's prompt using the selected Smart IDE tool context. "
+        "Return only the final answer for the user; do not mention routing metadata unless it is directly useful.\n\n"
+        f"User prompt:\n{prompt}\n\n"
+        "Selected tool context:\n"
+        f"tool_name: {route.tool_name}\n"
+        f"category: {route.category}\n"
+        f"reason: {route.reason}\n"
+        f"result:\n{tool_context}"
     )
 
 
