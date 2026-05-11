@@ -100,6 +100,8 @@ LOG_FILE=logs/mcp.log LOG_MAX_BYTES=2097152 LOG_BACKUP_COUNT=10 python src/serve
 The `process_pdf` MCP tool sends extracted PDF text to Ollama. Large PDFs may take longer to complete.
 
 Environment variables:
+- `OLLAMA_URL` (default: `http://127.0.0.1:11434`)
+- `OLLAMA_MODEL` (default: `qwen2.5vl:7b`)
 - `OLLAMA_TIMEOUT_SECONDS` (default: `300`)
 
 Example:
@@ -109,6 +111,25 @@ OLLAMA_TIMEOUT_SECONDS=600 python src/server.py
 ```
 
 If you still get timeouts, try reducing prompt size by passing `max_chars` in `process_pdf`.
+
+If Ollama is running but the router still returns `Failed to reach Ollama at http://127.0.0.1:11434`, verify the URL from the environment where the API process runs:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
+```
+
+When the API runs in Docker or WSL, `127.0.0.1` refers to that container or VM instead of the host machine. Set `OLLAMA_URL` to a reachable host address before starting the API, for example:
+
+```bash
+OLLAMA_URL=http://host.docker.internal:11434 python -m uvicorn http_api:app --app-dir src --reload
+```
+
+If Ollama is reachable but the configured model is missing, pull the model shown by the error or set `OLLAMA_MODEL` to one returned by `/api/tags`:
+
+```bash
+ollama pull qwen2.5vl:7b
+OLLAMA_MODEL=llama3.2 python -m uvicorn http_api:app --app-dir src --reload
+```
 
 ## Frontend prompt router API
 

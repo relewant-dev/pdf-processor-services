@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 from fastmcp.exceptions import ToolError
 from starlette.testclient import TestClient
@@ -158,3 +159,30 @@ async def test_missing_dependency_asgi_returns_setup_guidance() -> None:
 
     assert sent_messages[0]["status"] == 503
     assert b"python -m pip install -e ." in sent_messages[1]["body"]
+
+
+def test_ollama_status_error_message_reports_model_setup() -> None:
+    from clients.ollama import _ollama_status_error_message
+
+    request = httpx.Request("POST", "http://127.0.0.1:11434/api/chat")
+    response = httpx.Response(
+        404,
+        request=request,
+        text='{"error":"model not found"}',
+    )
+
+    message = _ollama_status_error_message(response)
+
+    assert "returned HTTP 404" in message
+    assert "ollama pull" in message
+    assert "OLLAMA_MODEL" in message
+
+
+def test_ollama_connection_error_message_reports_container_url_guidance() -> None:
+    from clients.ollama import _ollama_connection_error_message
+
+    message = _ollama_connection_error_message()
+
+    assert "Failed to reach Ollama" in message
+    assert "Docker or WSL" in message
+    assert "OLLAMA_URL" in message
