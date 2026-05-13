@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 from config import SERVICE_NAME
 
-HTTP_RUNTIME_DEPENDENCIES = ("fastmcp", "pydantic", "starlette")
+HTTP_RUNTIME_DEPENDENCIES = ("fastmcp", "multipart", "pydantic", "starlette")
 INSTALL_GUIDANCE = (
     "Missing HTTP API dependency: {dependencies}. Install project dependencies with "
     "`python -m pip install -e .`, then start the API with "
@@ -47,7 +47,9 @@ class MissingDependencyASGI:
 def get_missing_http_dependencies(
     dependencies: Iterable[str] = HTTP_RUNTIME_DEPENDENCIES,
 ) -> tuple[str, ...]:
-    return tuple(dependency for dependency in dependencies if find_spec(dependency) is None)
+    return tuple(
+        dependency for dependency in dependencies if find_spec(dependency) is None
+    )
 
 
 _MISSING_DEPENDENCIES = get_missing_http_dependencies()
@@ -62,7 +64,9 @@ else:
     from starlette.responses import HTMLResponse, JSONResponse, Response
     from starlette.routing import Route
 
+    from routers.document import router as document_router
     from routers.prompt import router as prompt_router
+    from services.document_upload import PdfUploadResponse
     from services.prompt_router import PromptExecutionRequest, PromptExecutionResponse
 
     def build_openapi_schema() -> dict[str, Any]:
@@ -74,6 +78,58 @@ else:
                 "description": "HTTP API for frontend prompt routing with Ollama-only answers.",
             },
             "paths": {
+                "/api/documents/pdf": {
+                    "post": {
+                        "tags": ["documents"],
+                        "summary": "Upload a PDF with multipart form data and answer a question using extracted text.",
+                        "description": "The API extracts PDF text server-side, then sends that extracted text to Ollama. Ollama does not receive or parse raw PDF bytes.",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "multipart/form-data": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["file", "question"],
+                                        "properties": {
+                                            "file": {
+                                                "type": "string",
+                                                "format": "binary",
+                                                "description": "PDF file to process.",
+                                            },
+                                            "question": {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "description": "Question to answer using the uploaded PDF content.",
+                                            },
+                                            "max_chars": {
+                                                "type": "integer",
+                                                "default": 30000,
+                                                "minimum": 1,
+                                                "description": "Maximum extracted PDF characters to include in the model prompt.",
+                                            },
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Ollama answer based on the uploaded PDF.",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "$ref": "#/components/schemas/PdfUploadResponse"
+                                        }
+                                    }
+                                },
+                            },
+                            "400": {
+                                "description": "Invalid upload, PDF extraction failure, or Ollama error."
+                            },
+                            "422": {"description": "Invalid form fields."},
+                        },
+                    }
+                },
                 "/api/prompts/execute": {
                     "post": {
                         "tags": ["prompts"],
@@ -107,6 +163,9 @@ else:
             },
             "components": {
                 "schemas": {
+                    "PdfUploadResponse": PdfUploadResponse.model_json_schema(
+                        ref_template="#/components/schemas/{model}"
+                    ),
                     "PromptExecutionRequest": PromptExecutionRequest.model_json_schema(
                         ref_template="#/components/schemas/{model}"
                     ),
@@ -121,8 +180,7 @@ else:
         return JSONResponse(build_openapi_schema())
 
     async def swagger_docs(_: object) -> Response:
-        return HTMLResponse(
-            """
+        return HTMLResponse("""
 <!doctype html>
 <html lang="en">
   <head>
@@ -143,14 +201,14 @@ else:
     </script>
   </body>
 </html>
-""".strip()
-        )
+""".strip())
 
     async def api_hint(_: object) -> Response:
         return JSONResponse(
             {
                 "service": SERVICE_NAME,
                 "routes": [
+                    "POST /api/documents/pdf",
                     "POST /api/prompts/execute",
                 ],
                 "docs": "Open Swagger UI at /docs or fetch the OpenAPI schema at /openapi.json.",
@@ -164,6 +222,7 @@ else:
                 Route("/", api_hint, methods=["GET"]),
                 Route("/docs", swagger_docs, methods=["GET"]),
                 Route("/openapi.json", openapi_schema, methods=["GET"]),
+                *document_router.routes,
                 *prompt_router.routes,
             ],
         )
