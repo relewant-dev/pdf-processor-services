@@ -112,7 +112,7 @@ If you still get timeouts, try reducing prompt size by passing `max_chars` in `p
 
 ## Frontend prompt router API
 
-The HTTP API exposes a single POST prompt execution endpoint. The frontend sends only the user message in the JSON body as `{"message":"prompt"}`. The service routes that message to the correct backend, document, health, or general chat tool, uses the inferred tool and related skills as Ollama context, and returns only the model answer as `{"response":"result of the prompt"}`.
+The HTTP API exposes prompt execution plus PDF upload endpoints. For prompts, the frontend sends only the user message in the JSON body as `{"message":"prompt"}`; the service routes that message to the correct backend, document, health, or general chat tool, uses the inferred tool and related skills as Ollama context, and returns only the model answer as `{"response":"result of the prompt"}`. For PDFs, the frontend sends `multipart/form-data` with a PDF file and question, and receives an Ollama answer based on the uploaded document content.
 
 ### Run the HTTP API locally
 
@@ -123,7 +123,7 @@ python -m pip install -e .
 python -m uvicorn http_api:app --app-dir src --reload
 ```
 
-Using `python -m uvicorn` helps avoid accidentally running a globally installed Uvicorn that cannot see this project's installed dependencies. If startup reports `Missing HTTP API dependency: starlette`, reinstall the project dependencies in the Python environment that launches Uvicorn:
+Using `python -m uvicorn` helps avoid accidentally running a globally installed Uvicorn that cannot see this project's installed dependencies. If startup reports a missing HTTP API dependency such as `starlette` or `multipart`, reinstall the project dependencies in the Python environment that launches Uvicorn:
 
 ```bash
 python -m pip install -e .
@@ -136,9 +136,29 @@ A route summary is available at `http://127.0.0.1:8000/`. Swagger UI is availabl
 
 Yes. After starting Uvicorn, open `http://127.0.0.1:8000/docs` in your browser. You can expand:
 
+- `POST /api/documents/pdf`, click **Try it out**, choose a PDF file, enter a `question`, and execute it.
 - `POST /api/prompts/execute`, click **Try it out**, use a JSON body such as `{"message":"Process an invoice document"}`, and execute it.
 
 The Swagger page is backed by `http://127.0.0.1:8000/openapi.json`.
+
+### POST `/api/documents/pdf`
+
+Use this endpoint when the frontend needs to upload a PDF with `multipart/form-data` and ask a question about the document content. The API extracts text from the PDF first, then sends that extracted text to Ollama. Ollama does **not** read the raw PDF binary directly. Scanned or image-only PDFs need OCR before this endpoint can answer questions from their content.
+
+The form fields are:
+
+- `file`: required PDF upload.
+- `question`: required question to answer from the PDF content.
+- `max_chars`: optional maximum extracted characters to include in the model prompt; defaults to `30000`.
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
+  -F "file=@/path/to/document.pdf;type=application/pdf" \
+  -F "question=Summarize this document" \
+  -F "max_chars=30000"
+```
+
+Successful responses contain only the Ollama answer as `{"response":"result based on the uploaded PDF"}`.
 
 ### POST `/api/prompts/execute`
 
