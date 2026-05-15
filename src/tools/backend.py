@@ -40,9 +40,21 @@ def generate_agent_plan_tool(
         "feature_summary": feature_summary,
         "constraints": constraints,
         "plan": [
-            {"step": 1, "agent": agents[0], "task": "Design architecture and contracts"},
-            {"step": 2, "agent": agents[1], "task": "Implement feature modules and tests"},
-            {"step": 3, "agent": agents[2], "task": "Run review checklist and release readiness"},
+            {
+                "step": 1,
+                "agent": agents[0],
+                "task": "Design architecture and contracts",
+            },
+            {
+                "step": 2,
+                "agent": agents[1],
+                "task": "Implement feature modules and tests",
+            },
+            {
+                "step": 3,
+                "agent": agents[2],
+                "task": "Run review checklist and release readiness",
+            },
         ],
     }
 
@@ -71,14 +83,18 @@ def resolve_backend_skill_tool(user_request: str) -> dict[str, str]:
             "reason": "Detected Python/FastAPI intent.",
         }
 
-    raise ToolError("Could not infer stack. Mention Java, Node/Express/TypeScript, or Python/FastAPI.")
+    raise ToolError(
+        "Could not infer stack. Mention Java, Node/Express/TypeScript, or Python/FastAPI."
+    )
 
 
 def list_document_blueprint_tool() -> dict[str, Any]:
     return {"document_processing": DOCUMENT_BLUEPRINT}
 
 
-def generate_document_skill_set_tool(document_type: str, compliance_mode: str = "standard") -> dict[str, Any]:
+def generate_document_skill_set_tool(
+    document_type: str, compliance_mode: str = "standard"
+) -> dict[str, Any]:
     doc_type = document_type.strip().lower()
     if not doc_type:
         raise ToolError("document_type must not be empty.")
@@ -90,9 +106,10 @@ def generate_document_skill_set_tool(document_type: str, compliance_mode: str = 
             "Flag duplicate invoice number risk",
         ],
         "curriculum vitae": [
-            "Extract identity, roles, education, skills",
-            "Normalize date ranges and durations",
-            "Flag missing chronology and overlapping periods",
+            "Extract candidate identity, contact channels, role targets, work history, education, certifications, projects, languages, and skills",
+            "Normalize date ranges, durations, seniority signals, technologies, and domain keywords",
+            "Map evidence-backed skills to roles or projects instead of inferring unsupported competencies",
+            "Flag missing chronology, unexplained gaps, overlapping periods, stale contact details, and low-confidence OCR spans",
         ],
         "insurance policy": [
             "Identify policyholder, insurer, policy number, effective dates, and renewal terms",
@@ -101,11 +118,14 @@ def generate_document_skill_set_tool(document_type: str, compliance_mode: str = 
             "Flag ambiguous clauses, missing schedules, and conflicts between declarations and endorsements",
         ],
     }
-    checklist = checklists.get(doc_type, [
-        "Classify document layout and language",
-        "Extract key fields with confidence scores",
-        "Validate required fields for downstream workflow",
-    ])
+    checklist = checklists.get(
+        doc_type,
+        [
+            "Classify document layout and language",
+            "Extract key fields with confidence scores",
+            "Validate required fields for downstream workflow",
+        ],
+    )
 
     return {
         "document_type": doc_type,
@@ -115,7 +135,9 @@ def generate_document_skill_set_tool(document_type: str, compliance_mode: str = 
     }
 
 
-def generate_document_agent_plan_tool(document_type: str, objective: str, constraints: str = "") -> dict[str, Any]:
+def generate_document_agent_plan_tool(
+    document_type: str, objective: str, constraints: str = ""
+) -> dict[str, Any]:
     if not objective.strip():
         raise ToolError("objective must not be empty.")
     doc_type = document_type.strip().lower()
@@ -124,21 +146,45 @@ def generate_document_agent_plan_tool(document_type: str, objective: str, constr
 
     agents = DOCUMENT_BLUEPRINT["agents"]
     plan = [
-        {"step": 1, "agent": agents[0], "task": "Classify document and choose extraction pipeline"},
-        {"step": 2, "agent": agents[1], "task": "Run OCR + structured field extraction with confidence scores"},
-        {"step": 3, "agent": agents[2], "task": "Validate business rules, required fields, and anomaly checks"},
+        {
+            "step": 1,
+            "agent": agents[0],
+            "task": "Classify document and choose extraction pipeline",
+        },
+        {
+            "step": 2,
+            "agent": agents[1],
+            "task": "Run OCR + structured field extraction with confidence scores",
+        },
+        {
+            "step": 3,
+            "agent": agents[2],
+            "task": "Validate business rules, required fields, and anomaly checks",
+        },
     ]
     if doc_type in {"insurance", "insurance policy", "policy"}:
-        plan.append({
-            "step": 4,
-            "agent": "insurance-document-reader-agent",
-            "task": "Read policy language, summarize coverage, exclusions, limits, deductibles, and claim obligations",
-        })
-    plan.append({
-        "step": len(plan) + 1,
-        "agent": "document-review-agent",
-        "task": "Generate review summary and remediation recommendations",
-    })
+        plan.append(
+            {
+                "step": 4,
+                "agent": "insurance-document-reader-agent",
+                "task": "Read policy language, summarize coverage, exclusions, limits, deductibles, and claim obligations",
+            }
+        )
+    if doc_type in {"cv", "resume", "curriculum vitae"}:
+        plan.append(
+            {
+                "step": 4,
+                "agent": "cv-reader-agent",
+                "task": "Read the CV, extract an evidence-backed candidate profile, normalize experience, and flag gaps or ambiguities",
+            }
+        )
+    plan.append(
+        {
+            "step": len(plan) + 1,
+            "agent": "document-review-agent",
+            "task": "Generate review summary and remediation recommendations",
+        }
+    )
     return {
         "document_type": doc_type,
         "objective": objective,
@@ -156,7 +202,34 @@ def generate_document_tool_spec_tool(capability: str) -> dict[str, Any]:
         "insurance": {
             "name": "read_insurance_policy",
             "args": ["document_uri", "policy_profile", "jurisdiction"],
-            "returns": ["coverage_summary", "exclusions", "claim_requirements", "warnings"],
+            "returns": [
+                "coverage_summary",
+                "exclusions",
+                "claim_requirements",
+                "warnings",
+            ],
+        },
+        "cv": {
+            "name": "read_cv",
+            "args": ["document_uri", "role_profile", "language"],
+            "returns": [
+                "candidate_profile",
+                "experience_timeline",
+                "skills_matrix",
+                "education",
+                "warnings",
+            ],
+        },
+        "resume": {
+            "name": "read_cv",
+            "args": ["document_uri", "role_profile", "language"],
+            "returns": [
+                "candidate_profile",
+                "experience_timeline",
+                "skills_matrix",
+                "education",
+                "warnings",
+            ],
         },
         "extract": {
             "name": "extract_document_fields",
@@ -174,11 +247,14 @@ def generate_document_tool_spec_tool(capability: str) -> dict[str, Any]:
             "returns": ["redacted_document_uri", "redaction_map"],
         },
     }
-    resolved = specs.get(cap, {
-        "name": f"document_{cap}_tool",
-        "args": ["payload"],
-        "returns": ["result"],
-    })
+    resolved = specs.get(
+        cap,
+        {
+            "name": f"document_{cap}_tool",
+            "args": ["payload"],
+            "returns": ["result"],
+        },
+    )
     resolved["error_guidance"] = [
         "Return explicit field-level errors for extraction failures",
         "Include remediation hints when confidence is below threshold",
@@ -186,7 +262,7 @@ def generate_document_tool_spec_tool(capability: str) -> dict[str, Any]:
     return resolved
 
 
-def resolve_document_processing_flow_tool(user_request: str) -> dict[str, str]:
+def resolve_document_processing_flow_tool(user_request: str) -> dict[str, Any]:
     text = user_request.strip().lower()
     if not text:
         raise ToolError("user_request must not be empty.")
@@ -206,8 +282,16 @@ def resolve_document_processing_flow_tool(user_request: str) -> dict[str, str]:
     if "cv" in text or "resume" in text or "curriculum vitae" in text:
         return {
             "document_type": "curriculum vitae",
-            "flow": "candidate_profile_extraction",
-            "reason": "Detected CV/resume processing intent.",
+            "flow": "cv_reading",
+            "agent": "cv-reader-agent",
+            "skills": [
+                "cv-reading",
+                "candidate-profile-extraction",
+                "experience-skills-normalization",
+                "document-validation",
+                "pii-redaction",
+            ],
+            "reason": "Detected CV/resume reading intent.",
         }
 
     return {

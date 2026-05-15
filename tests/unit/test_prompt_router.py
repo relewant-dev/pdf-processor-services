@@ -9,7 +9,11 @@ from starlette.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from http_api import create_app
-from services.prompt_router import PromptExecutionRequest, execute_prompt_tool, route_prompt
+from services.prompt_router import (
+    PromptExecutionRequest,
+    execute_prompt_tool,
+    route_prompt,
+)
 
 
 def test_route_prompt_detects_backend_intent() -> None:
@@ -33,20 +37,31 @@ def test_route_prompt_detects_insurance_intent() -> None:
     assert route.tool_name == "resolve_document_processing_flow"
 
 
+def test_route_prompt_detects_cv_reading_intent() -> None:
+    route = route_prompt("Read this CV and summarize the candidate profile")
+
+    assert route.category == "document"
+    assert route.tool_name == "resolve_document_processing_flow"
+
+
 def test_route_prompt_rejects_blank_prompt() -> None:
     with pytest.raises(ToolError, match="message must not be empty"):
         route_prompt("   ")
 
 
 @pytest.mark.anyio
-async def test_execute_prompt_tool_calls_inferred_backend_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_execute_prompt_tool_calls_inferred_backend_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_prompts: list[str] = []
 
     async def fake_chat_with_ollama(prompt: str) -> str:
         captured_prompts.append(prompt)
         return "generated backend result"
 
-    monkeypatch.setattr("services.prompt_router.chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        "services.prompt_router.chat_with_ollama", fake_chat_with_ollama
+    )
 
     response = await execute_prompt_tool(
         PromptExecutionRequest(message="Build Node API with Express and TypeScript")
@@ -60,14 +75,18 @@ async def test_execute_prompt_tool_calls_inferred_backend_tool(monkeypatch: pyte
 
 
 @pytest.mark.anyio
-async def test_execute_prompt_tool_accepts_frontend_message(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_execute_prompt_tool_accepts_frontend_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_prompts: list[str] = []
 
     async def fake_chat_with_ollama(prompt: str) -> str:
         captured_prompts.append(prompt)
         return "document result"
 
-    monkeypatch.setattr("services.prompt_router.chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        "services.prompt_router.chat_with_ollama", fake_chat_with_ollama
+    )
 
     response = await execute_prompt_tool(
         PromptExecutionRequest.model_validate(
@@ -81,17 +100,48 @@ async def test_execute_prompt_tool_accepts_frontend_message(monkeypatch: pytest.
 
 
 @pytest.mark.anyio
-async def test_execute_prompt_tool_routes_insurance_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_execute_prompt_tool_routes_cv_reading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_prompts: list[str] = []
+
+    async def fake_chat_with_ollama(prompt: str) -> str:
+        captured_prompts.append(prompt)
+        return "cv result"
+
+    monkeypatch.setattr(
+        "services.prompt_router.chat_with_ollama", fake_chat_with_ollama
+    )
+
+    response = await execute_prompt_tool(
+        PromptExecutionRequest(message="Read this CV and extract skills")
+    )
+
+    assert response.response == "cv result"
+    assert "resolve_document_processing_flow" in captured_prompts[0]
+    assert "cv_reading" in captured_prompts[0]
+    assert "cv-reader-agent" in captured_prompts[0]
+    assert "cv-reading" in captured_prompts[0]
+
+
+@pytest.mark.anyio
+async def test_execute_prompt_tool_routes_insurance_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured_prompts: list[str] = []
 
     async def fake_chat_with_ollama(prompt: str) -> str:
         captured_prompts.append(prompt)
         return "insurance result"
 
-    monkeypatch.setattr("services.prompt_router.chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        "services.prompt_router.chat_with_ollama", fake_chat_with_ollama
+    )
 
     response = await execute_prompt_tool(
-        PromptExecutionRequest(message="Read this insurance policy for claim requirements")
+        PromptExecutionRequest(
+            message="Read this insurance policy for claim requirements"
+        )
     )
 
     assert response.response == "insurance result"
@@ -103,16 +153,22 @@ async def test_execute_prompt_tool_routes_insurance_policy(monkeypatch: pytest.M
 def test_get_prompt_route_endpoint_is_removed() -> None:
     client = TestClient(create_app())
 
-    response = client.get("/api/prompts/route", params={"prompt": "Need a Java backend"})
+    response = client.get(
+        "/api/prompts/route", params={"prompt": "Need a Java backend"}
+    )
 
     assert response.status_code == 404
 
 
-def test_post_prompt_execute_endpoint_returns_only_response(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_post_prompt_execute_endpoint_returns_only_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     async def fake_chat_with_ollama(_: str) -> str:
         return "Process the resume with structured extraction."
 
-    monkeypatch.setattr("services.prompt_router.chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        "services.prompt_router.chat_with_ollama", fake_chat_with_ollama
+    )
     client = TestClient(create_app())
 
     response = client.post(
@@ -121,7 +177,9 @@ def test_post_prompt_execute_endpoint_returns_only_response(monkeypatch: pytest.
     )
 
     assert response.status_code == 200
-    assert response.json() == {"response": "Process the resume with structured extraction."}
+    assert response.json() == {
+        "response": "Process the resume with structured extraction."
+    }
 
 
 def test_post_prompt_execute_rejects_extra_fields() -> None:
@@ -156,7 +214,9 @@ def test_openapi_schema_documents_prompt_routes() -> None:
     assert "/api/prompts/route" not in schema["paths"]
     assert "/api/prompts/execute" in schema["paths"]
     assert "PromptExecutionRequest" in schema["components"]["schemas"]
-    assert schema["components"]["schemas"]["PromptExecutionRequest"]["properties"].keys() == {"message"}
+    assert schema["components"]["schemas"]["PromptExecutionRequest"][
+        "properties"
+    ].keys() == {"message"}
 
 
 def test_http_dependency_checker_reports_missing_modules() -> None:

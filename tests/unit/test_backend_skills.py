@@ -50,7 +50,10 @@ async def test_list_backend_blueprints_contains_skills() -> None:
     data = await list_backend_blueprints()
     assert "stacks" in data
     assert "java_spring_boot" in data["stacks"]
-    assert "generate-spring-boot-java-backend" in data["stacks"]["java_spring_boot"]["skills"]
+    assert (
+        "generate-spring-boot-java-backend"
+        in data["stacks"]["java_spring_boot"]["skills"]
+    )
 
 
 @pytest.mark.anyio
@@ -72,6 +75,61 @@ async def test_list_platform_blueprints_contains_insurance_agent_and_skills() ->
     assert "insurance-policy-reading" in document_processing["skills"]
     assert "coverage-exclusions-analysis" in document_processing["skills"]
     assert "claims-requirements-extraction" in document_processing["skills"]
+
+
+@pytest.mark.anyio
+async def test_list_platform_blueprints_contains_cv_agent_and_skills() -> None:
+    data = await list_platform_blueprints()
+
+    document_processing = data["document_processing"]
+
+    assert "cv-reader-agent" in document_processing["agents"]
+    assert "cv-reading" in document_processing["skills"]
+    assert "candidate-profile-extraction" in document_processing["skills"]
+    assert "experience-skills-normalization" in document_processing["skills"]
+
+
+@pytest.mark.anyio
+async def test_resolve_document_processing_flow_detects_cv_reading() -> None:
+    result = await resolve_document_processing_flow(
+        "Read this CV and summarize candidate skills"
+    )
+
+    assert result["document_type"] == "curriculum vitae"
+    assert result["flow"] == "cv_reading"
+    assert result["agent"] == "cv-reader-agent"
+    assert "cv-reading" in result["skills"]
+
+
+@pytest.mark.anyio
+async def test_generate_document_skill_set_for_curriculum_vitae() -> None:
+    result = await generate_document_skill_set("curriculum vitae")
+
+    assert result["document_type"] == "curriculum vitae"
+    assert "cv-reading" in result["priority_skills"]
+    assert any("candidate identity" in item for item in result["checklist"])
+
+
+@pytest.mark.anyio
+async def test_generate_document_agent_plan_uses_cv_reader_agent() -> None:
+    result = await generate_document_agent_plan(
+        "curriculum vitae",
+        "Extract a candidate profile and normalize skills",
+    )
+
+    agents = [step["agent"] for step in result["plan"]]
+
+    assert "cv-reader-agent" in agents
+    assert agents[-1] == "document-review-agent"
+
+
+@pytest.mark.anyio
+async def test_generate_document_tool_spec_for_cv_capability() -> None:
+    result = await generate_document_tool_spec("cv")
+
+    assert result["name"] == "read_cv"
+    assert "candidate_profile" in result["returns"]
+    assert "skills_matrix" in result["returns"]
 
 
 @pytest.mark.anyio

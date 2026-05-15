@@ -95,6 +95,9 @@ DOCUMENT_BLUEPRINT: dict[str, list[str]] = {
         "insurance-policy-reading",
         "coverage-exclusions-analysis",
         "claims-requirements-extraction",
+        "cv-reading",
+        "candidate-profile-extraction",
+        "experience-skills-normalization",
         "document-processing-observability",
     ],
     "agents": [
@@ -102,6 +105,7 @@ DOCUMENT_BLUEPRINT: dict[str, list[str]] = {
         "document-extraction-agent",
         "document-validation-agent",
         "insurance-document-reader-agent",
+        "cv-reader-agent",
         "document-review-agent",
     ],
     "tools": [
