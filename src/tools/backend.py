@@ -94,6 +94,12 @@ def generate_document_skill_set_tool(document_type: str, compliance_mode: str = 
             "Normalize date ranges and durations",
             "Flag missing chronology and overlapping periods",
         ],
+        "insurance policy": [
+            "Identify policyholder, insurer, policy number, effective dates, and renewal terms",
+            "Extract coverage limits, deductibles, endorsements, exclusions, and waiting periods",
+            "Summarize claim notice duties, required evidence, deadlines, and escalation paths",
+            "Flag ambiguous clauses, missing schedules, and conflicts between declarations and endorsements",
+        ],
     }
     checklist = checklists.get(doc_type, [
         "Classify document layout and language",
@@ -117,16 +123,27 @@ def generate_document_agent_plan_tool(document_type: str, objective: str, constr
         raise ToolError("document_type must not be empty.")
 
     agents = DOCUMENT_BLUEPRINT["agents"]
+    plan = [
+        {"step": 1, "agent": agents[0], "task": "Classify document and choose extraction pipeline"},
+        {"step": 2, "agent": agents[1], "task": "Run OCR + structured field extraction with confidence scores"},
+        {"step": 3, "agent": agents[2], "task": "Validate business rules, required fields, and anomaly checks"},
+    ]
+    if doc_type in {"insurance", "insurance policy", "policy"}:
+        plan.append({
+            "step": 4,
+            "agent": "insurance-document-reader-agent",
+            "task": "Read policy language, summarize coverage, exclusions, limits, deductibles, and claim obligations",
+        })
+    plan.append({
+        "step": len(plan) + 1,
+        "agent": "document-review-agent",
+        "task": "Generate review summary and remediation recommendations",
+    })
     return {
         "document_type": doc_type,
         "objective": objective,
         "constraints": constraints,
-        "plan": [
-            {"step": 1, "agent": agents[0], "task": "Classify document and choose extraction pipeline"},
-            {"step": 2, "agent": agents[1], "task": "Run OCR + structured field extraction with confidence scores"},
-            {"step": 3, "agent": agents[2], "task": "Validate business rules, required fields, and anomaly checks"},
-            {"step": 4, "agent": agents[3], "task": "Generate review summary and remediation recommendations"},
-        ],
+        "plan": plan,
     }
 
 
@@ -136,6 +153,11 @@ def generate_document_tool_spec_tool(capability: str) -> dict[str, Any]:
         raise ToolError("capability must not be empty.")
 
     specs = {
+        "insurance": {
+            "name": "read_insurance_policy",
+            "args": ["document_uri", "policy_profile", "jurisdiction"],
+            "returns": ["coverage_summary", "exclusions", "claim_requirements", "warnings"],
+        },
         "extract": {
             "name": "extract_document_fields",
             "args": ["document_uri", "schema"],
@@ -174,6 +196,12 @@ def resolve_document_processing_flow_tool(user_request: str) -> dict[str, str]:
             "document_type": "invoice",
             "flow": "ap_invoice_automation",
             "reason": "Detected invoice processing intent.",
+        }
+    if "insurance" in text or "policy" in text or "coverage" in text or "claim" in text:
+        return {
+            "document_type": "insurance policy",
+            "flow": "insurance_policy_reading",
+            "reason": "Detected insurance policy reading intent.",
         }
     if "cv" in text or "resume" in text or "curriculum vitae" in text:
         return {

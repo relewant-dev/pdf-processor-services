@@ -122,3 +122,34 @@ For document-heavy workflows (invoices, CVs, resumes, forms), add the following 
 - `resolve_document_processing_flow(user_request)`: routes request to invoice, CV, or generic extraction flow.
 
 - `list_platform_blueprints`: returns both backend and document-processing blueprint catalogs in one response.
+
+## 6) Insurance document-reading extension
+
+Insurance policy requests are handled as document-processing workflows with a dedicated **insurance-document-reader-agent**.
+
+### Insurance skills
+
+1. **insurance-policy-reading**
+   - Reads policy declarations, schedules, endorsements, certificates, renewal notices, and claim forms.
+   - Extracts insurer, policyholder, policy number, effective dates, limits, deductibles, premiums, exclusions, endorsements, cancellation, and renewal terms.
+
+2. **coverage-exclusions-analysis**
+   - Maps user scenarios to coverage grants, limits, exclusions, exceptions, endorsements, and unknowns.
+   - Flags ambiguous clauses and recommends human review rather than making binding coverage determinations.
+
+3. **claims-requirements-extraction**
+   - Extracts notice duties, proof-of-loss requirements, evidence checklists, deadlines, contacts, and escalation paths.
+   - Produces actionable claim-preparation checklists while protecting sensitive claim details.
+
+### Insurance agent
+
+**insurance-document-reader-agent**
+- Input: extracted policy text, insurance document type, user question, optional scenario/claim details.
+- Output: coverage summary, exclusions, claim requirements, missing-information prompts, confidence warnings, and human-review recommendations.
+- Uses: `insurance-policy-reading`, `coverage-exclusions-analysis`, `claims-requirements-extraction`, `document-validation`, and `pii-redaction`.
+
+### Routing examples
+
+- “Read this insurance policy and summarize coverage” -> `insurance_policy_reading`.
+- “Is water damage excluded in this policy?” -> `insurance_policy_reading` with `coverage-exclusions-analysis`.
+- “What documents do I need for this claim?” -> `insurance_policy_reading` with `claims-requirements-extraction`.

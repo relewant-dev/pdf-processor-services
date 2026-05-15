@@ -92,12 +92,16 @@ DOCUMENT_BLUEPRINT: dict[str, list[str]] = {
         "pii-redaction",
         "document-validation",
         "fraud-signals-detection",
+        "insurance-policy-reading",
+        "coverage-exclusions-analysis",
+        "claims-requirements-extraction",
         "document-processing-observability",
     ],
     "agents": [
         "document-intake-agent",
         "document-extraction-agent",
         "document-validation-agent",
+        "insurance-document-reader-agent",
         "document-review-agent",
     ],
     "tools": [
