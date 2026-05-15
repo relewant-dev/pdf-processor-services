@@ -153,3 +153,35 @@ Insurance policy requests are handled as document-processing workflows with a de
 - “Read this insurance policy and summarize coverage” -> `insurance_policy_reading`.
 - “Is water damage excluded in this policy?” -> `insurance_policy_reading` with `coverage-exclusions-analysis`.
 - “What documents do I need for this claim?” -> `insurance_policy_reading` with `claims-requirements-extraction`.
+
+
+## 7) CV/resume document-reading extension
+
+CV and resume requests are handled as document-processing workflows with a dedicated **cv-reader-agent**.
+
+### CV/resume skills
+
+1. **cv-reading**
+   - Reads CVs, resumes, academic CVs, candidate profiles, portfolios, and role-specific application documents.
+   - Produces evidence-backed candidate summaries, extracted facts, strengths, missing-information notes, and review warnings.
+
+2. **candidate-profile-extraction**
+   - Extracts identity, contact channels, work history, education, certifications, projects, publications, languages, links, and skills.
+   - Preserves field-level confidence, source references, and explicit “not found” markers for missing fields.
+
+3. **experience-skills-normalization**
+   - Normalizes chronology, durations, overlaps, gaps, technologies, domain keywords, and skills matrices.
+   - Links skills to supporting roles, projects, certifications, or education instead of inferring unsupported competencies.
+
+### CV/resume agent
+
+**cv-reader-agent**
+- Input: extracted CV/resume text, target role context, user question, optional language/region/compliance constraints.
+- Output: candidate profile, experience timeline, skills matrix, education/certification summary, confidence warnings, chronology issues, and human-review prompts.
+- Uses: `cv-reading`, `candidate-profile-extraction`, `experience-skills-normalization`, `document-validation`, and `pii-redaction`.
+
+### Routing examples
+
+- “Read this CV and summarize the candidate” -> `cv_reading`.
+- “Extract skills from this resume” -> `cv_reading` with `experience-skills-normalization`.
+- “Create a structured candidate profile from this curriculum vitae” -> `cv_reading` with `candidate-profile-extraction`.
