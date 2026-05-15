@@ -201,3 +201,20 @@ Router validation is covered by unit tests and can be checked with:
 python -m compileall src tests
 pytest -q
 ```
+
+## Vector database for PDF extraction
+
+The service can persist processed CV and insurance PDFs to **Qdrant** vector collections. The MCP tools are:
+
+- `initialize_vector_database`: creates the `candidates` and `insurances` Qdrant collections.
+- `process_candidate_pdf`: the `cv-reader-agent` extracts a CV/resume PDF and saves it in the `candidates` collection with a semantic embedding and payload fields.
+- `process_insurance_pdf`: the `insurance-document-reader-agent` extracts an insurance PDF and saves it in the `insurances` collection with a semantic embedding and payload fields.
+
+Required environment variables:
+
+- `QDRANT_URL` (default: `http://127.0.0.1:6333`).
+- `QDRANT_API_KEY` for secured deployments.
+- `OLLAMA_EMBEDDING_MODEL` (default: `nomic-embed-text`).
+- `VECTOR_SIZE` (default: `768`).
+
+See `docs/runbooks/vector-database.md` for local setup and operational guidance.
