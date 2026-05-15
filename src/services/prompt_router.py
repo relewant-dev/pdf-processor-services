@@ -71,6 +71,10 @@ def route_prompt(prompt: str) -> PromptRoute:
             "pii",
             "extract fields",
             "validate document",
+            "insurance",
+            "policy",
+            "coverage",
+            "claim",
         )
     ):
         return PromptRoute(

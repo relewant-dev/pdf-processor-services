@@ -26,6 +26,13 @@ def test_route_prompt_detects_document_intent() -> None:
     assert route.tool_name == "resolve_document_processing_flow"
 
 
+def test_route_prompt_detects_insurance_intent() -> None:
+    route = route_prompt("Read this insurance policy and explain coverage")
+
+    assert route.category == "document"
+    assert route.tool_name == "resolve_document_processing_flow"
+
+
 def test_route_prompt_rejects_blank_prompt() -> None:
     with pytest.raises(ToolError, match="message must not be empty"):
         route_prompt("   ")
@@ -71,6 +78,26 @@ async def test_execute_prompt_tool_accepts_frontend_message(monkeypatch: pytest.
     assert response.response == "document result"
     assert "resolve_document_processing_flow" in captured_prompts[0]
     assert "generic_structured_extraction" in captured_prompts[0]
+
+
+@pytest.mark.anyio
+async def test_execute_prompt_tool_routes_insurance_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_prompts: list[str] = []
+
+    async def fake_chat_with_ollama(prompt: str) -> str:
+        captured_prompts.append(prompt)
+        return "insurance result"
+
+    monkeypatch.setattr("services.prompt_router.chat_with_ollama", fake_chat_with_ollama)
+
+    response = await execute_prompt_tool(
+        PromptExecutionRequest(message="Read this insurance policy for claim requirements")
+    )
+
+    assert response.response == "insurance result"
+    assert "resolve_document_processing_flow" in captured_prompts[0]
+    assert "insurance_policy_reading" in captured_prompts[0]
+    assert "insurance policy" in captured_prompts[0]
 
 
 def test_get_prompt_route_endpoint_is_removed() -> None:

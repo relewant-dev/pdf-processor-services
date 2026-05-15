@@ -76,8 +76,19 @@ pytest -q
 
 Coverage includes:
 - intent routing for Java/Spring, Node/Express/TypeScript, and Python/FastAPI;
+- insurance document-reading flow routing and agent/skill exposure;
 - invalid stack intent handling;
 - blueprint list contains expected generation skills.
+
+## Insurance document-reading agent
+
+Document-processing blueprints include an `insurance-document-reader-agent` for reading insurance policies and related claim documents. Insurance prompts such as “read this insurance policy,” “summarize coverage,” “check exclusions,” or “extract claim requirements” route to the `insurance_policy_reading` flow and use these skills:
+
+- `insurance-policy-reading`
+- `coverage-exclusions-analysis`
+- `claims-requirements-extraction`
+
+The insurance agent summarizes policy facts, coverage, exclusions, deadlines, and claim obligations from supplied document text, while flagging missing pages, ambiguous clauses, and items needing licensed or legal review.
 
 ## Rotative logs for MCP tools
 
