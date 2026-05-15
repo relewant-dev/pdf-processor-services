@@ -77,6 +77,7 @@ pytest -q
 Coverage includes:
 - intent routing for Java/Spring, Node/Express/TypeScript, and Python/FastAPI;
 - insurance document-reading flow routing and agent/skill exposure;
+- CV/resume reading flow routing and agent/skill exposure;
 - invalid stack intent handling;
 - blueprint list contains expected generation skills.
 
@@ -89,6 +90,17 @@ Document-processing blueprints include an `insurance-document-reader-agent` for 
 - `claims-requirements-extraction`
 
 The insurance agent summarizes policy facts, coverage, exclusions, deadlines, and claim obligations from supplied document text, while flagging missing pages, ambiguous clauses, and items needing licensed or legal review.
+
+
+## CV/resume document-reading agent
+
+Document-processing blueprints include a `cv-reader-agent` for reading CVs, resumes, academic CVs, and candidate profiles. CV prompts such as “read this CV,” “summarize this resume,” or “extract candidate skills” route to the `cv_reading` flow and use these skills:
+
+- `cv-reading`
+- `candidate-profile-extraction`
+- `experience-skills-normalization`
+
+The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions.
 
 ## Rotative logs for MCP tools
 
