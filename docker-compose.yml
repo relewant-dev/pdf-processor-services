@@ -6,4 +6,4 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - ${QDRANT_STORAGE_PATH:-./qdrant_storage}:/qdrant/storage
+      - ${QDRANT_STORAGE_PATH}:/qdrant/storage
