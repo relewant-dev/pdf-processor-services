@@ -31,6 +31,21 @@ ollama pull nomic-embed-text
 QDRANT_URL=http://127.0.0.1:6333 python src/server.py
 ```
 
+
+If you start Qdrant with `docker compose`, set `QDRANT_STORAGE_PATH` in a local `.env` file so data is stored on your machine:
+
+```env
+QDRANT_STORAGE_PATH=/absolute/path/on/your/machine
+```
+
+Then run:
+
+```bash
+docker compose up -d qdrant
+```
+
+You can copy from `.env.example` and update the path for your machine.
+
 Then call `initialize_vector_database` once. After that:
 
 - call `process_candidate_pdf` for CV/resume PDFs; it extracts structured candidate JSON, creates an embedding, and upserts into the `candidates` collection.
