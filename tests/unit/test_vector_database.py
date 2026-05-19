@@ -15,8 +15,10 @@ from repositories.vector_database import (
 
 def test_qdrant_collections_preserve_requested_payload_fields() -> None:
     assert set(COLLECTION_SCHEMAS) == {CANDIDATES_COLLECTION, INSURANCES_COLLECTION}
+    assert "id" in COLLECTION_SCHEMAS[CANDIDATES_COLLECTION]["payload_fields"]
     assert "email" in COLLECTION_SCHEMAS[CANDIDATES_COLLECTION]["payload_fields"]
     assert "competences" in COLLECTION_SCHEMAS[CANDIDATES_COLLECTION]["payload_fields"]
+    assert "id" in COLLECTION_SCHEMAS[INSURANCES_COLLECTION]["payload_fields"]
     assert "insurance_number" in COLLECTION_SCHEMAS[INSURANCES_COLLECTION]["payload_fields"]
     assert "coverage_details" in COLLECTION_SCHEMAS[INSURANCES_COLLECTION]["payload_fields"]
     assert "source_document_text" in COLLECTION_SCHEMAS[INSURANCES_COLLECTION]["payload_fields"]

@@ -19,6 +19,7 @@ COLLECTION_SCHEMAS: dict[str, dict[str, Any]] = {
     CANDIDATES_COLLECTION: {
         "description": "CV/resume extraction output written by cv-reader-agent.",
         "payload_fields": [
+            "id",
             "first_name",
             "last_name",
             "email",
@@ -41,6 +42,7 @@ COLLECTION_SCHEMAS: dict[str, dict[str, Any]] = {
     INSURANCES_COLLECTION: {
         "description": "Insurance extraction output written by insurance-document-reader-agent.",
         "payload_fields": [
+            "id",
             "insurance_number",
             "candidate_id",
             "insurance_type",
@@ -103,8 +105,8 @@ async def save_candidate_record(
 ) -> str:
     logger.info("Saving candidate record to collection=%s", CANDIDATES_COLLECTION)
     vector = validate_embedding(embedding)
-    payload = _build_payload(candidate.model_dump(mode="json"), source_document_text)
     point_id = _candidate_point_id(candidate)
+    payload = _build_payload(candidate.model_dump(mode="json"), source_document_text, point_id)
     await _upsert_point(CANDIDATES_COLLECTION, point_id, vector, payload)
     return point_id
 
@@ -116,8 +118,8 @@ async def save_insurance_record(
 ) -> str:
     logger.info("Saving insurance record to collection=%s", INSURANCES_COLLECTION)
     vector = validate_embedding(embedding)
-    payload = _build_payload(insurance.model_dump(mode="json"), source_document_text)
     point_id = _insurance_point_id(insurance)
+    payload = _build_payload(insurance.model_dump(mode="json"), source_document_text, point_id)
     await _upsert_point(INSURANCES_COLLECTION, point_id, vector, payload)
     return point_id
 
@@ -175,9 +177,10 @@ async def _upsert_point(
         await client.close()
 
 
-def _build_payload(record: dict[str, Any], source_document_text: str) -> dict[str, Any]:
+def _build_payload(record: dict[str, Any], source_document_text: str, point_id: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     return {
+        "id": point_id,
         **record,
         "source_document_text": source_document_text,
         "created_at": now,
