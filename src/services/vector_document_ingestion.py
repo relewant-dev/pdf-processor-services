@@ -8,16 +8,19 @@ from pydantic import ValidationError
 
 from clients.ollama import chat_with_ollama, embed_with_ollama
 from domain.vector_records import CandidateRecord, InsuranceRecord
+from logging_config import get_logger
 from repositories.vector_database import save_candidate_record, save_insurance_record
 from tools.document import extract_pdf_text, truncate_document_text
 
 DocumentAgent = Literal["cv-reader-agent", "insurance-document-reader-agent"]
+logger = get_logger()
 
 
 async def process_candidate_pdf_to_vector_db(
     file_path: str,
     max_chars: int = 30000,
 ) -> dict[str, Any]:
+    logger.info("Processing candidate PDF for vector DB file_path=%s", file_path)
     document_text = truncate_document_text(
         extract_pdf_text(file_path), max_chars=max_chars
     )
@@ -50,6 +53,7 @@ async def process_insurance_pdf_to_vector_db(
     file_path: str,
     max_chars: int = 30000,
 ) -> dict[str, Any]:
+    logger.info("Processing insurance PDF for vector DB file_path=%s", file_path)
     document_text = truncate_document_text(
         extract_pdf_text(file_path), max_chars=max_chars
     )
@@ -87,6 +91,7 @@ async def _extract_structured_json(
     schema_name: str,
     instructions: str,
 ) -> dict[str, Any]:
+    logger.debug("Extracting structured JSON with agent=%s schema=%s", agent, schema_name)
     prompt = (
         f"You are {agent}. Extract a {schema_name} from the PDF text.\n"
         f"{instructions}\n\n"
@@ -107,6 +112,7 @@ def _parse_json_object(raw_response: str) -> dict[str, Any]:
     try:
         value = json.loads(text)
     except json.JSONDecodeError as exc:
+        logger.error("Model response is not valid JSON for vector persistence.")
         raise ToolError(
             "Model did not return valid JSON for vector database persistence."
         ) from exc
@@ -121,6 +127,7 @@ def _validate_candidate(payload: dict[str, Any]) -> CandidateRecord:
     try:
         return CandidateRecord.model_validate(payload)
     except ValidationError as exc:
+        logger.error("Candidate payload validation failed.")
         raise ToolError(
             f"Candidate extraction did not match the candidates schema: {exc}"
         ) from exc
@@ -130,6 +137,7 @@ def _validate_insurance(payload: dict[str, Any]) -> InsuranceRecord:
     try:
         return InsuranceRecord.model_validate(payload)
     except ValidationError as exc:
+        logger.error("Insurance payload validation failed.")
         raise ToolError(
             f"Insurance extraction did not match the insurances schema: {exc}"
         ) from exc

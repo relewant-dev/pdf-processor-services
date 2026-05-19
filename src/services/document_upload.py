@@ -8,11 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import UploadFile
 
 from clients.ollama import chat_with_ollama
+from logging_config import get_logger
 from tools.document import (
     build_document_prompt,
     extract_pdf_text,
     truncate_document_text,
 )
+logger = get_logger()
 
 
 class PdfUploadRequest(BaseModel):
@@ -43,6 +45,7 @@ async def process_pdf_upload(
     Ollama does not receive or parse the raw PDF binary. Image-only or scanned PDFs
     without an extractable text layer require OCR before this endpoint can answer.
     """
+    logger.info("Processing PDF upload filename=%s", upload.filename or "")
     _validate_pdf_upload(upload)
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir) / "upload.pdf"
@@ -61,6 +64,7 @@ def _validate_pdf_upload(upload: UploadFile) -> None:
     if not filename.lower().endswith(".pdf"):
         raise ToolError("Uploaded file must use a .pdf filename.")
     if content_type and content_type not in ("application/pdf", "application/x-pdf"):
+        logger.warning("Rejected upload with invalid content_type=%s", content_type)
         raise ToolError(
             f"Uploaded file must be a PDF, got content type: {content_type}"
         )
@@ -74,5 +78,6 @@ async def _write_upload_to_file(upload: UploadFile, destination: Path) -> None:
             file_obj.write(chunk)
 
     await upload.close()
+    logger.debug("Wrote upload to temp file bytes=%s", bytes_written)
     if bytes_written == 0:
         raise ToolError("Uploaded PDF is empty.")

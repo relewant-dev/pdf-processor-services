@@ -7,6 +7,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 
 from clients.ollama import chat_with_ollama, ollama_health
+from logging_config import get_logger
 from tools.backend import (
     generate_agent_plan_tool,
     generate_document_agent_plan_tool,
@@ -21,6 +22,7 @@ from tools.backend import (
 )
 
 PromptCategory = Literal["backend", "document", "health", "chat"]
+logger = get_logger()
 
 
 class PromptRoute(BaseModel):
@@ -127,6 +129,7 @@ async def execute_prompt_tool(
     request: PromptExecutionRequest,
 ) -> PromptExecutionResponse:
     route = route_prompt(request.message)
+    logger.info("Prompt routed to tool=%s category=%s", route.tool_name, route.category)
 
     if route.tool_name == "send_prompt":
         model_prompt = request.message
@@ -153,6 +156,7 @@ def _build_model_prompt(prompt: str, route: PromptRoute, tool_result: Any) -> st
 
 
 async def _execute_tool(tool_name: str, prompt: str, arguments: dict[str, Any]) -> Any:
+    logger.debug("Executing routed tool=%s", tool_name)
     async_tools: dict[str, Callable[[], Any]] = {
         "send_prompt": lambda: chat_with_ollama(str(_argument(arguments, "prompt", prompt))),
         "health_check": ollama_health,
