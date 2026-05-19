@@ -11,9 +11,13 @@ from config import (
     OLLAMA_TIMEOUT_SECONDS,
     OLLAMA_URL,
 )
+from logging_config import get_logger
+
+logger = get_logger()
 
 
 async def chat_with_ollama(prompt: str) -> str:
+    logger.debug("Calling Ollama chat with prompt_length=%s", len(prompt))
     if not prompt.strip():
         raise ToolError("Prompt must not be empty.")
 
@@ -29,11 +33,13 @@ async def chat_with_ollama(prompt: str) -> str:
             response.raise_for_status()
             data = response.json()
     except httpx.ReadTimeout as exc:
+        logger.error("Ollama chat timed out.")
         raise ToolError(
             f"Ollama timed out after {OLLAMA_TIMEOUT_SECONDS:.0f}s. "
             "Try a smaller document, a faster model, or increase OLLAMA_TIMEOUT_SECONDS."
         ) from exc
     except httpx.HTTPError as exc:
+        logger.error("Ollama chat request failed at url=%s", OLLAMA_URL)
         raise ToolError(
             f"Failed to reach Ollama at {OLLAMA_URL}. Ensure 'ollama serve' is running."
         ) from exc
@@ -46,12 +52,14 @@ async def chat_with_ollama(prompt: str) -> str:
 
 
 async def ollama_health() -> dict[str, Any]:
+    logger.debug("Checking Ollama health at url=%s", OLLAMA_URL)
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             tags_resp = await client.get(f"{OLLAMA_URL}/api/tags")
             tags_resp.raise_for_status()
             models = tags_resp.json().get("models", [])
     except httpx.HTTPError as exc:
+        logger.error("Ollama health check failed at url=%s", OLLAMA_URL)
         raise ToolError(
             f"Ollama is not reachable at {OLLAMA_URL}. Start it with: ollama serve"
         ) from exc
@@ -66,6 +74,7 @@ async def ollama_health() -> dict[str, Any]:
 
 
 async def embed_with_ollama(text: str) -> list[float]:
+    logger.debug("Calling Ollama embeddings with text_length=%s", len(text))
     if not text.strip():
         raise ToolError("Text to embed must not be empty.")
 
@@ -80,11 +89,13 @@ async def embed_with_ollama(text: str) -> list[float]:
             response.raise_for_status()
             data = response.json()
     except httpx.ReadTimeout as exc:
+        logger.error("Ollama embedding request timed out.")
         raise ToolError(
             f"Ollama embedding timed out after {OLLAMA_TIMEOUT_SECONDS:.0f}s. "
             "Try a smaller document or increase OLLAMA_TIMEOUT_SECONDS."
         ) from exc
     except httpx.HTTPError as exc:
+        logger.error("Ollama embedding request failed at url=%s", OLLAMA_URL)
         raise ToolError(
             f"Failed to reach Ollama embeddings at {OLLAMA_URL}. "
             "Ensure 'ollama serve' is running."

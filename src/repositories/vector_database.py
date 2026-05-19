@@ -8,10 +8,12 @@ from fastmcp.exceptions import ToolError
 
 from config import QDRANT_API_KEY, QDRANT_TIMEOUT_SECONDS, QDRANT_URL, VECTOR_SIZE
 from domain.vector_records import CandidateRecord, InsuranceRecord
+from logging_config import get_logger
 
 CANDIDATES_COLLECTION = "candidates"
 INSURANCES_COLLECTION = "insurances"
 VECTOR_DISTANCE = "Cosine"
+logger = get_logger()
 
 COLLECTION_SCHEMAS: dict[str, dict[str, Any]] = {
     CANDIDATES_COLLECTION: {
@@ -69,6 +71,7 @@ COLLECTION_SCHEMAS: dict[str, dict[str, Any]] = {
 
 
 def validate_embedding(embedding: Sequence[float]) -> list[float]:
+    logger.debug("Validating embedding vector with length=%s", len(embedding))
     if not embedding:
         raise ToolError("Embedding vector must not be empty.")
     if len(embedding) != VECTOR_SIZE:
@@ -80,6 +83,11 @@ def validate_embedding(embedding: Sequence[float]) -> list[float]:
 
 
 async def init_vector_database() -> None:
+    logger.info(
+        "Initializing vector database at url=%s for collections=%s",
+        QDRANT_URL,
+        ", ".join((CANDIDATES_COLLECTION, INSURANCES_COLLECTION)),
+    )
     client = _build_qdrant_client()
     try:
         await _ensure_collection(client, CANDIDATES_COLLECTION)
@@ -93,6 +101,7 @@ async def save_candidate_record(
     source_document_text: str,
     embedding: Sequence[float],
 ) -> str:
+    logger.info("Saving candidate record to collection=%s", CANDIDATES_COLLECTION)
     vector = validate_embedding(embedding)
     payload = _build_payload(candidate.model_dump(mode="json"), source_document_text)
     point_id = _candidate_point_id(candidate)
@@ -105,6 +114,7 @@ async def save_insurance_record(
     source_document_text: str,
     embedding: Sequence[float],
 ) -> str:
+    logger.info("Saving insurance record to collection=%s", INSURANCES_COLLECTION)
     vector = validate_embedding(embedding)
     payload = _build_payload(insurance.model_dump(mode="json"), source_document_text)
     point_id = _insurance_point_id(insurance)
@@ -116,8 +126,15 @@ async def _ensure_collection(client: Any, collection_name: str) -> None:
     qdrant_models = _load_qdrant_models()
     exists = await client.collection_exists(collection_name=collection_name)
     if exists:
+        logger.debug("Collection already exists: %s", collection_name)
         return
 
+    logger.info(
+        "Creating missing collection=%s with vector_size=%s distance=%s",
+        collection_name,
+        VECTOR_SIZE,
+        VECTOR_DISTANCE,
+    )
     await client.create_collection(
         collection_name=collection_name,
         vectors_config=qdrant_models.VectorParams(
@@ -133,6 +150,12 @@ async def _upsert_point(
     vector: list[float],
     payload: dict[str, Any],
 ) -> None:
+    logger.info(
+        "Upserting point id=%s into collection=%s payload_keys=%s",
+        point_id,
+        collection_name,
+        sorted(payload.keys()),
+    )
     client = _build_qdrant_client()
     qdrant_models = _load_qdrant_models()
     try:
@@ -173,6 +196,11 @@ def _insurance_point_id(insurance: InsuranceRecord) -> str:
 
 
 def _build_qdrant_client() -> Any:
+    logger.debug(
+        "Building Qdrant client for url=%s timeout=%ss",
+        QDRANT_URL,
+        QDRANT_TIMEOUT_SECONDS,
+    )
     qdrant_client_module = _load_qdrant_client_module()
     return qdrant_client_module.AsyncQdrantClient(
         url=QDRANT_URL,
@@ -185,6 +213,7 @@ def _load_qdrant_client_module() -> Any:
     from importlib.util import find_spec
 
     if find_spec("qdrant_client") is None:
+        logger.error("qdrant-client dependency is missing.")
         raise ToolError(
             "qdrant-client is required for vector database persistence. "
             "Install project dependencies with `python -m pip install -e .`."
