@@ -9,6 +9,10 @@ from starlette.datastructures import UploadFile
 
 from clients.ollama import chat_with_ollama
 from logging_config import get_logger
+from services.vector_document_ingestion import (
+    process_candidate_pdf_to_vector_db,
+    process_insurance_pdf_to_vector_db,
+)
 from tools.document import (
     build_document_prompt,
     extract_pdf_text,
@@ -34,6 +38,7 @@ class PdfUploadRequest(BaseModel):
 
 class PdfUploadResponse(BaseModel):
     response: str
+    persistence: str | None = None
 
 
 async def process_pdf_upload(
@@ -51,11 +56,45 @@ async def process_pdf_upload(
         temp_path = Path(temp_dir) / "upload.pdf"
         await _write_upload_to_file(upload, temp_path)
         document_text = extract_pdf_text(str(temp_path))
+        persistence_result = await _persist_document_if_supported(
+            file_path=str(temp_path),
+            question=request.question,
+            document_text=document_text,
+            max_chars=request.max_chars,
+        )
 
     truncated_text = truncate_document_text(document_text, max_chars=request.max_chars)
     prompt = build_document_prompt(truncated_text, request.question)
     model_result = await chat_with_ollama(prompt)
-    return PdfUploadResponse(response=model_result)
+    return PdfUploadResponse(response=model_result, persistence=persistence_result)
+
+
+async def _persist_document_if_supported(
+    file_path: str,
+    question: str,
+    document_text: str,
+    max_chars: int,
+) -> str | None:
+    doc_type = _infer_document_type(question=question, document_text=document_text)
+    if doc_type == "cv":
+        await process_candidate_pdf_to_vector_db(file_path, max_chars=max_chars)
+        return "saved:candidates"
+    if doc_type == "insurance":
+        await process_insurance_pdf_to_vector_db(file_path, max_chars=max_chars)
+        return "saved:insurances"
+    return None
+
+
+def _infer_document_type(question: str, document_text: str) -> str | None:
+    content = f"{question}\n{document_text}".lower()
+    if any(token in content for token in ("curriculum vitae", "resume", "cv")):
+        return "cv"
+    if any(
+        token in content
+        for token in ("insurance", "policy", "coverage", "premium", "claim")
+    ):
+        return "insurance"
+    return None
 
 
 def _validate_pdf_upload(upload: UploadFile) -> None:

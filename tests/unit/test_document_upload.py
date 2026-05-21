@@ -34,20 +34,36 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_calls_ollama(
         captured["prompt"] = prompt
         return "PDF answer"
 
+    async def fake_process_candidate_pdf_to_vector_db(
+        file_path: str,
+        max_chars: int = 30000,
+    ) -> dict[str, str]:
+        captured["saved_file_path"] = file_path
+        captured["saved_max_chars"] = str(max_chars)
+        return {"status": "ok"}
+
     monkeypatch.setattr(document_upload, "extract_pdf_text", fake_extract_pdf_text)
     monkeypatch.setattr(document_upload, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        document_upload,
+        "process_candidate_pdf_to_vector_db",
+        fake_process_candidate_pdf_to_vector_db,
+    )
 
     response = asyncio.run(
         process_pdf_upload(
-            make_upload(),
-            PdfUploadRequest(question="What is this document?", max_chars=1000),
+            make_upload(filename="cv.pdf"),
+            PdfUploadRequest(question="Make a summary of this CV", max_chars=1000),
         )
     )
 
     assert response.response == "PDF answer"
+    assert response.persistence == "saved:candidates"
     assert captured["file_path"].endswith(".pdf")
     assert "Uploaded PDF text" in captured["prompt"]
-    assert "What is this document?" in captured["prompt"]
+    assert "Make a summary of this CV" in captured["prompt"]
+    assert captured["saved_file_path"].endswith(".pdf")
+    assert captured["saved_max_chars"] == "1000"
 
 
 def test_process_pdf_upload_rejects_non_pdf_filename() -> None:
@@ -58,6 +74,34 @@ def test_process_pdf_upload_rejects_non_pdf_filename() -> None:
                 PdfUploadRequest(question="What is this?"),
             )
         )
+
+
+def test_process_pdf_upload_without_cv_or_insurance_skips_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_chat_with_ollama(prompt: str) -> str:
+        return "general answer"
+
+    def fake_extract_pdf_text(file_path: str) -> str:
+        return "Random contract text without known tokens."
+
+    async def fail_if_called(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("vector persistence should not be called")
+
+    monkeypatch.setattr(document_upload, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(document_upload, "extract_pdf_text", fake_extract_pdf_text)
+    monkeypatch.setattr(document_upload, "process_candidate_pdf_to_vector_db", fail_if_called)
+    monkeypatch.setattr(document_upload, "process_insurance_pdf_to_vector_db", fail_if_called)
+
+    response = asyncio.run(
+        process_pdf_upload(
+            make_upload(),
+            PdfUploadRequest(question="Summarize this document", max_chars=1000),
+        )
+    )
+
+    assert response.response == "general answer"
+    assert response.persistence is None
 
 
 def test_process_pdf_upload_rejects_empty_upload() -> None:
@@ -100,7 +144,7 @@ def test_pdf_upload_endpoint_accepts_multipart_form_data(
     )
 
     assert response.status_code == 200
-    assert response.json() == {"response": "endpoint answer"}
+    assert response.json() == {"response": "endpoint answer", "persistence": None}
     assert captured == {
         "filename": "sample.pdf",
         "question": "Summarize",

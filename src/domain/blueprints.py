@@ -114,7 +114,6 @@ DOCUMENT_BLUEPRINT: dict[str, list[str]] = {
         "generate_document_agent_plan",
         "generate_document_tool_spec",
         "resolve_document_processing_flow",
-        "initialize_vector_database",
         "process_candidate_pdf",
         "process_insurance_pdf",
     ],
