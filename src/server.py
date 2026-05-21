@@ -8,7 +8,6 @@ from fastmcp.exceptions import ToolError
 from clients.ollama import chat_with_ollama, ollama_health
 from config import SERVICE_NAME
 from logging_config import get_logger
-from repositories.vector_database import init_vector_database
 from services.vector_document_ingestion import (
     process_candidate_pdf_to_vector_db,
     process_insurance_pdf_to_vector_db,
@@ -136,13 +135,6 @@ async def generate_document_tool_spec(capability: str) -> dict[str, Any]:
 async def resolve_document_processing_flow(user_request: str) -> dict[str, Any]:
     logger.info("Tool resolve_document_processing_flow called")
     return resolve_document_processing_flow_tool(user_request)
-
-
-@mcp.tool(description="Create Qdrant vector collections for candidate and insurance records.")
-async def initialize_vector_database() -> dict[str, str]:
-    logger.info("Tool initialize_vector_database called")
-    await init_vector_database()
-    return {"status": "ok", "database": "qdrant", "collections": "candidates, insurances"}
 
 
 @mcp.tool(
