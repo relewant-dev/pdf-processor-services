@@ -14,6 +14,18 @@ def test_parse_json_object_accepts_markdown_fenced_json() -> None:
     }
 
 
+def test_validate_candidate_normalizes_competences_list() -> None:
+    payload = {
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "competences": ["Python", "Java"],
+    }
+
+    candidate = vector_document_ingestion._validate_candidate(payload)
+
+    assert candidate.competences == {"items": ["Python", "Java"]}
+
+
 @pytest.mark.anyio
 async def test_process_candidate_pdf_saves_cv_agent_result(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: dict[str, object] = {}

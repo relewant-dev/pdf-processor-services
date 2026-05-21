@@ -123,9 +123,18 @@ def _parse_json_object(raw_response: str) -> dict[str, Any]:
     return value
 
 
+def _normalize_candidate_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    competences = normalized.get("competences")
+    if isinstance(competences, list):
+        normalized["competences"] = {"items": competences}
+    return normalized
+
+
 def _validate_candidate(payload: dict[str, Any]) -> CandidateRecord:
+    normalized_payload = _normalize_candidate_payload(payload)
     try:
-        return CandidateRecord.model_validate(payload)
+        return CandidateRecord.model_validate(normalized_payload)
     except ValidationError as exc:
         logger.error("Candidate payload validation failed.")
         raise ToolError(
