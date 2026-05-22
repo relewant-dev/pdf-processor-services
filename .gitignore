@@ -7,3 +7,6 @@ __pycache__/
 # generated projects
 data/*
 !data/.gitkeep
+.env.local
+src/smart_ide_services.egg-info/
+*.egg-info/
