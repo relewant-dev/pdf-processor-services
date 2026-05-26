@@ -3,7 +3,7 @@ version: "3.9"
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: smart-ide-qdrant
+    container_name: qdrant
     ports:
       - "6333:6333"
       - "6334:6334"
