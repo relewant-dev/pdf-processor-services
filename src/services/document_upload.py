@@ -13,6 +13,7 @@ from tools.document import (
     extract_pdf_text,
     truncate_document_text,
 )
+from services.document_persistence import persist_document_if_supported
 
 
 class PdfUploadRequest(BaseModel):
@@ -52,6 +53,7 @@ async def process_pdf_upload(
     truncated_text = truncate_document_text(document_text, max_chars=request.max_chars)
     prompt = build_document_prompt(truncated_text, request.question)
     model_result = await chat_with_ollama(prompt)
+    await persist_document_if_supported(document_text=truncated_text, question=request.question)
     return PdfUploadResponse(response=model_result)
 
 

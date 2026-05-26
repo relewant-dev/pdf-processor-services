@@ -34,8 +34,18 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_calls_ollama(
         captured["prompt"] = prompt
         return "PDF answer"
 
+    async def fake_persist_document_if_supported(document_text: str, question: str) -> str:
+        captured["persist_document_text"] = document_text
+        captured["persist_question"] = question
+        return "cv"
+
     monkeypatch.setattr(document_upload, "extract_pdf_text", fake_extract_pdf_text)
     monkeypatch.setattr(document_upload, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        document_upload,
+        "persist_document_if_supported",
+        fake_persist_document_if_supported,
+    )
 
     response = asyncio.run(
         process_pdf_upload(
@@ -48,6 +58,8 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_calls_ollama(
     assert captured["file_path"].endswith(".pdf")
     assert "Uploaded PDF text" in captured["prompt"]
     assert "What is this document?" in captured["prompt"]
+    assert captured["persist_document_text"] == "Uploaded PDF text"
+    assert captured["persist_question"] == "What is this document?"
 
 
 def test_process_pdf_upload_rejects_non_pdf_filename() -> None:
