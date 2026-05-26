@@ -201,3 +201,21 @@ Router validation is covered by unit tests and can be checked with:
 python -m compileall src tests
 pytest -q
 ```
+
+
+## Docker Compose (Qdrant storage path from `.env`)
+
+A Docker Compose file is included at the repository root and reads the Qdrant host storage path from `.env` using `QDRANT_STORAGE_PATH`.
+
+Current `.env` example:
+
+```bash
+QDRANT_STORAGE_PATH=./qdrant_storage
+```
+
+Start Qdrant with:
+
+```bash
+docker compose up -d qdrant
+```
+
