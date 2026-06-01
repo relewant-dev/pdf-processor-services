@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -43,14 +42,18 @@ def infer_pdf_domain(document_text: str, question: str) -> str:
 
 
 def build_candidate_payload(document_text: str) -> dict[str, Any]:
-    email = _extract_first(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", document_text)
+    document_hash = _document_hash(document_text)
+    email = _extract_first(
+        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", document_text
+    )
     phone = _extract_first(r"\+?[0-9][0-9\s().-]{6,}[0-9]", document_text)
     lines = [line.strip() for line in document_text.splitlines() if line.strip()]
     full_name = lines[0] if lines else ""
     first_name, last_name = _split_name(full_name)
 
     return {
-        "id": str(uuid.uuid4()),
+        "id": f"candidate-{document_hash}",
+        "document_hash": document_hash,
         "first_name": first_name,
         "last_name": last_name,
         "email": email,
@@ -66,20 +69,25 @@ def build_candidate_payload(document_text: str) -> dict[str, Any]:
 
 
 def build_insurance_payload(document_text: str) -> dict[str, Any]:
+    document_hash = _document_hash(document_text)
     policy_number = _extract_first(
         r"(?:policy|insurance)\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Za-z0-9-]+)",
         document_text,
         capture_group=1,
     )
-    provider_name = _extract_first(
-        r"(?:provider|insurer|company)\s*[:\-]\s*([^\n]+)",
-        document_text,
-        capture_group=1,
-    ) or "unknown"
+    provider_name = (
+        _extract_first(
+            r"(?:provider|insurer|company)\s*[:\-]\s*([^\n]+)",
+            document_text,
+            capture_group=1,
+        )
+        or "unknown"
+    )
 
     return {
-        "id": str(uuid.uuid4()),
-        "insurance_number": policy_number or f"unknown-{uuid.uuid4().hex[:12]}",
+        "id": f"insurance-{document_hash}",
+        "document_hash": document_hash,
+        "insurance_number": policy_number or f"unknown-{document_hash[:12]}",
         "insurance_type": _detect_insurance_type(document_text),
         "provider_name": provider_name.strip(),
         "status": _detect_insurance_status(document_text),
@@ -94,16 +102,48 @@ def build_insurance_payload(document_text: str) -> dict[str, Any]:
 async def persist_document_if_supported(document_text: str, question: str) -> str:
     domain = infer_pdf_domain(document_text, question)
     if domain == "cv":
-        await _upsert_payload(
-            QDRANT_CANDIDATES_COLLECTION,
-            build_candidate_payload(document_text),
-        )
+        payload = build_candidate_payload(document_text)
+        await _upsert_payload_if_new(QDRANT_CANDIDATES_COLLECTION, payload)
     elif domain == "insurance":
-        await _upsert_payload(
-            QDRANT_INSURANCES_COLLECTION,
-            build_insurance_payload(document_text),
-        )
+        payload = build_insurance_payload(document_text)
+        await _upsert_payload_if_new(QDRANT_INSURANCES_COLLECTION, payload)
     return domain
+
+
+async def _upsert_payload_if_new(collection_name: str, payload: dict[str, Any]) -> None:
+    if await _document_exists(collection_name, payload):
+        return
+
+    await _upsert_payload(collection_name, payload)
+
+
+async def _document_exists(collection_name: str, payload: dict[str, Any]) -> bool:
+    body = {
+        "filter": {
+            "should": [
+                {
+                    "key": "document_hash",
+                    "match": {"value": payload["document_hash"]},
+                },
+                {
+                    "key": "raw_text",
+                    "match": {"value": payload["raw_text"]},
+                },
+            ]
+        },
+        "limit": 1,
+        "with_payload": False,
+        "with_vector": False,
+    }
+    timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
+    async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
+        response = await client.post(
+            f"/collections/{collection_name}/points/scroll", json=body
+        )
+        response.raise_for_status()
+
+    points = response.json().get("result", {}).get("points", [])
+    return bool(points)
 
 
 async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None:
@@ -125,6 +165,13 @@ async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None
 def _qdrant_point_id(value: str) -> int:
     digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:16]
     return int(digest, 16)
+
+
+def _document_hash(document_text: str) -> str:
+    normalized_text = "\n".join(
+        line.strip() for line in document_text.splitlines() if line.strip()
+    )
+    return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
 
 
 def _extract_first(pattern: str, text: str, capture_group: int = 0) -> str | None:
