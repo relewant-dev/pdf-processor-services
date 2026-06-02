@@ -2,6 +2,17 @@
 
 This document defines the active **skills**, **agents**, and **MCP tools** for document-processing workflows. Backend generation skills and their routing tools have been removed.
 
+
+## Skill file layout
+
+Each reusable skill is stored in its own directory under `skills/`, and the skill definition file is always named `skills.md`:
+
+```text
+skills/<skill-name>/skills.md
+```
+
+The `skills/` directory intentionally has no catalog `README.md`; use this blueprint document and the per-skill folders as the source of truth.
+
 ## 1) Document processing tools
 
 For document-heavy workflows (invoices, CVs, resumes, forms), add the following MCP tools:
