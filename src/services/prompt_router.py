@@ -7,20 +7,16 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 
 from clients.ollama import chat_with_ollama, ollama_health
-from tools.backend import (
-    generate_agent_plan_tool,
+from tools.blueprints import (
     generate_document_agent_plan_tool,
     generate_document_skill_set_tool,
     generate_document_tool_spec_tool,
-    generate_skill_set_tool,
-    list_backend_blueprints_tool,
     list_document_blueprint_tool,
     list_platform_blueprints_tool,
-    resolve_backend_skill_tool,
     resolve_document_processing_flow_tool,
 )
 
-PromptCategory = Literal["backend", "document", "health", "chat"]
+PromptCategory = Literal["document", "health", "chat"]
 
 
 class PromptRoute(BaseModel):
@@ -84,27 +80,6 @@ def route_prompt(prompt: str) -> PromptRoute:
             reason="Detected document-processing intent.",
         )
 
-    if any(
-        token in text
-        for token in (
-            "backend",
-            "api",
-            "java",
-            "spring",
-            "node",
-            "express",
-            "typescript",
-            "python",
-            "fastapi",
-        )
-    ):
-        return PromptRoute(
-            prompt=prompt,
-            category="backend",
-            tool_name="resolve_backend_skill",
-            reason="Detected backend-generation intent.",
-        )
-
     return PromptRoute(
         prompt=prompt,
         category="chat",
@@ -161,21 +136,8 @@ async def _execute_tool(tool_name: str, prompt: str, arguments: dict[str, Any]) 
         return await async_tools[tool_name]()
 
     sync_tools: dict[str, Callable[[], Any]] = {
-        "list_backend_blueprints": list_backend_blueprints_tool,
         "list_platform_blueprints": list_platform_blueprints_tool,
         "list_document_blueprint": list_document_blueprint_tool,
-        "resolve_backend_skill": lambda: resolve_backend_skill_tool(
-            str(_argument(arguments, "user_request", prompt))
-        ),
-        "generate_skill_set": lambda: generate_skill_set_tool(
-            str(_required_argument(arguments, "stack")),
-            str(_argument(arguments, "project_type", "api")),
-        ),
-        "generate_agent_plan": lambda: generate_agent_plan_tool(
-            str(_required_argument(arguments, "stack")),
-            str(_argument(arguments, "feature_summary", prompt)),
-            str(_argument(arguments, "constraints", "")),
-        ),
         "resolve_document_processing_flow": lambda: resolve_document_processing_flow_tool(
             str(_argument(arguments, "user_request", prompt))
         ),
