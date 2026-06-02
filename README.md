@@ -183,6 +183,8 @@ curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
 
 Successful responses contain only the Ollama answer as `{"response":"result based on the uploaded PDF"}`.
 
+When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts a Qdrant payload in the configured `candidates` or `insurances` collection. In addition to `raw_text`, the persistence layer maps detected CV sections into candidate fields such as `education`, `previous_works`, and `competences`, and maps detected insurance policy facts into `coverage_details`, `documents`, `provider_name`, `insurance_number`, `insurance_type`, and `status`. Missing fields remain empty or `unknown` instead of being guessed.
+
 ### POST `/api/prompts/execute`
 
 Use this endpoint when the frontend wants the API to route a user message and execute it by calling the inferred tool.

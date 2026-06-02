@@ -48,7 +48,7 @@ def build_candidate_payload(document_text: str) -> dict[str, Any]:
     )
     phone = _extract_first(r"\+?[0-9][0-9\s().-]{6,}[0-9]", document_text)
     lines = [line.strip() for line in document_text.splitlines() if line.strip()]
-    full_name = lines[0] if lines else ""
+    full_name = _extract_candidate_name(lines)
     first_name, last_name = _split_name(full_name)
 
     return {
@@ -59,9 +59,9 @@ def build_candidate_payload(document_text: str) -> dict[str, Any]:
         "email": email,
         "phone": phone,
         "seniority": _detect_seniority(document_text),
-        "competences": {},
-        "previous_works": [],
-        "education": [],
+        "competences": _extract_candidate_competences(document_text),
+        "previous_works": _extract_candidate_previous_works(document_text),
+        "education": _extract_candidate_education(document_text),
         "raw_text": document_text,
         "created_at": _utc_timestamp(),
         "updated_at": _utc_timestamp(),
@@ -71,28 +71,21 @@ def build_candidate_payload(document_text: str) -> dict[str, Any]:
 def build_insurance_payload(document_text: str) -> dict[str, Any]:
     document_hash = _document_hash(document_text)
     policy_number = _extract_first(
-        r"(?:policy|insurance)\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Za-z0-9-]+)",
+        r"(?:policy|insurance|certificate)\s*(?:number|no\.?|#)\s*[:\-]?\s*([A-Za-z0-9-]+)",
         document_text,
         capture_group=1,
     )
-    provider_name = (
-        _extract_first(
-            r"(?:provider|insurer|company)\s*[:\-]\s*([^\n]+)",
-            document_text,
-            capture_group=1,
-        )
-        or "unknown"
-    )
+    provider_name = _extract_insurance_provider_name(document_text)
 
     return {
         "id": f"insurance-{document_hash}",
         "document_hash": document_hash,
         "insurance_number": policy_number or f"unknown-{document_hash[:12]}",
         "insurance_type": _detect_insurance_type(document_text),
-        "provider_name": provider_name.strip(),
+        "provider_name": provider_name,
         "status": _detect_insurance_status(document_text),
-        "coverage_details": {},
-        "documents": [],
+        "coverage_details": _extract_insurance_coverage_details(document_text),
+        "documents": _extract_insurance_document_references(document_text),
         "raw_text": document_text,
         "created_at": _utc_timestamp(),
         "updated_at": _utc_timestamp(),
@@ -103,47 +96,11 @@ async def persist_document_if_supported(document_text: str, question: str) -> st
     domain = infer_pdf_domain(document_text, question)
     if domain == "cv":
         payload = build_candidate_payload(document_text)
-        await _upsert_payload_if_new(QDRANT_CANDIDATES_COLLECTION, payload)
+        await _upsert_payload(QDRANT_CANDIDATES_COLLECTION, payload)
     elif domain == "insurance":
         payload = build_insurance_payload(document_text)
-        await _upsert_payload_if_new(QDRANT_INSURANCES_COLLECTION, payload)
+        await _upsert_payload(QDRANT_INSURANCES_COLLECTION, payload)
     return domain
-
-
-async def _upsert_payload_if_new(collection_name: str, payload: dict[str, Any]) -> None:
-    if await _document_exists(collection_name, payload):
-        return
-
-    await _upsert_payload(collection_name, payload)
-
-
-async def _document_exists(collection_name: str, payload: dict[str, Any]) -> bool:
-    body = {
-        "filter": {
-            "should": [
-                {
-                    "key": "document_hash",
-                    "match": {"value": payload["document_hash"]},
-                },
-                {
-                    "key": "raw_text",
-                    "match": {"value": payload["raw_text"]},
-                },
-            ]
-        },
-        "limit": 1,
-        "with_payload": False,
-        "with_vector": False,
-    }
-    timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
-    async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
-        response = await client.post(
-            f"/collections/{collection_name}/points/scroll", json=body
-        )
-        response.raise_for_status()
-
-    points = response.json().get("result", {}).get("points", [])
-    return bool(points)
 
 
 async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None:
@@ -160,6 +117,436 @@ async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None
     timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
         await client.put(f"/collections/{collection_name}/points", json=body)
+
+
+def _extract_candidate_name(lines: list[str]) -> str:
+    ignored_headings = {
+        "curriculum vitae",
+        "resume",
+        "cv",
+        "profile",
+        "summary",
+        "contact",
+    }
+    for line in lines[:8]:
+        normalized = line.strip().lower().rstrip(":")
+        if normalized in ignored_headings:
+            continue
+        if "@" in line or re.search(r"\d", line):
+            continue
+        if re.search(
+            r"\b(phone|email|address|linkedin|github)\b", line, re.IGNORECASE
+        ):
+            continue
+        words = [word for word in re.split(r"\s+", line) if word]
+        if 2 <= len(words) <= 5:
+            return line
+    return lines[0] if lines else ""
+
+
+def _extract_candidate_education(text: str) -> list[dict[str, str]]:
+    entries = _extract_section_entries(
+        text,
+        ("education", "academic background", "studies", "formation"),
+        (
+            "experience",
+            "work experience",
+            "professional experience",
+            "employment",
+            "skills",
+            "technical skills",
+            "competences",
+            "certifications",
+            "projects",
+            "languages",
+        ),
+    )
+    education: list[dict[str, str]] = []
+    degree_pattern = (
+        r"\b(?:bachelor|master|msc|m\.sc|bsc|b\.sc|phd|doctorate|diploma|"
+        r"degree|laurea|licence|certificate)\b"
+    )
+    for entry in entries:
+        if not re.search(degree_pattern, entry, re.IGNORECASE):
+            continue
+        education.append(
+            _without_empty_values(
+                {
+                    "degree": _extract_degree(entry),
+                    "institution": _extract_institution(entry),
+                    "date_range": _extract_date_range(entry),
+                    "description": entry,
+                }
+            )
+        )
+    return education
+
+
+def _extract_candidate_previous_works(text: str) -> list[dict[str, str]]:
+    entries = _extract_section_entries(
+        text,
+        ("experience", "work experience", "professional experience", "employment"),
+        (
+            "education",
+            "skills",
+            "technical skills",
+            "competences",
+            "certifications",
+            "projects",
+            "languages",
+        ),
+    )
+    work_entries: list[dict[str, str]] = []
+    for entry in entries:
+        if not _looks_like_work_entry(entry):
+            continue
+        work_entries.append(
+            _without_empty_values(
+                {
+                    "title": _extract_job_title(entry),
+                    "company": _extract_company(entry),
+                    "date_range": _extract_date_range(entry),
+                    "description": entry,
+                }
+            )
+        )
+    return work_entries
+
+
+def _extract_candidate_competences(text: str) -> dict[str, list[str]]:
+    skills_text = "\n".join(
+        _extract_section_entries(
+            text,
+            ("skills", "technical skills", "competences", "competencies"),
+            (
+                "experience",
+                "work experience",
+                "professional experience",
+                "education",
+                "certifications",
+                "projects",
+                "languages",
+            ),
+        )
+    )
+    corpus = skills_text or text
+    technical_keywords = (
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "sql",
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "gcp",
+        "linux",
+        "git",
+        "react",
+        "node",
+        "fastapi",
+        "django",
+        "machine learning",
+        "artificial intelligence",
+        "data analysis",
+    )
+    listed_skills = _split_list_items(skills_text) if skills_text else []
+    technical_keyword_map = {keyword.lower(): keyword for keyword in technical_keywords}
+    listed_technical = [
+        technical_keyword_map[skill.lower()]
+        for skill in listed_skills
+        if skill.lower() in technical_keyword_map
+    ]
+    technical = _deduplicate_preserving_order(
+        listed_technical + _ordered_keyword_matches(corpus, technical_keywords)
+    )
+    custom = [
+        skill
+        for skill in listed_skills
+        if skill.lower() not in {item.lower() for item in technical}
+        and not re.search(
+            r"\b(skills?|competences?|competencies)\b", skill, re.IGNORECASE
+        )
+    ]
+    competences: dict[str, list[str]] = {}
+    if technical:
+        competences["technical"] = technical
+    if custom:
+        competences["other"] = custom[:20]
+    return competences
+
+
+def _extract_insurance_provider_name(text: str) -> str:
+    explicit_provider = _extract_first(
+        r"(?:provider|insurer|insurance company|company)\s*[:\-]\s*([^\n]+)",
+        text,
+        capture_group=1,
+    )
+    if explicit_provider:
+        return explicit_provider.strip()
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines[:8]:
+        if re.search(
+            r"\b(insurance|assurance|mutual|life|health|casualty)\b",
+            line,
+            re.IGNORECASE,
+        ):
+            return line
+    return "unknown"
+
+
+def _extract_insurance_coverage_details(text: str) -> dict[str, Any]:
+    details = _without_empty_values(
+        {
+            "policyholder": _extract_first(
+                r"(?:policyholder|insured|member|name)\s*[:\-]\s*([^\n]+)",
+                text,
+                capture_group=1,
+            ),
+            "effective_date": _extract_labeled_date(
+                text, ("effective date", "start date", "valid from")
+            ),
+            "expiration_date": _extract_labeled_date(
+                text, ("expiration date", "expiry date", "end date", "valid until")
+            ),
+            "premium": _extract_money_for_label(text, ("premium", "amount due")),
+            "deductible": _extract_money_for_label(text, ("deductible", "excess")),
+            "coverage_limit": _extract_money_for_label(
+                text, ("coverage limit", "limit", "sum insured")
+            ),
+            "beneficiary": _extract_first(
+                r"beneficiary\s*[:\-]\s*([^\n]+)", text, capture_group=1
+            ),
+        }
+    )
+    coverages = _extract_coverage_lines(text)
+    exclusions = _extract_exclusion_lines(text)
+    if coverages:
+        details["coverages"] = coverages
+    if exclusions:
+        details["exclusions"] = exclusions
+    return details
+
+
+def _extract_insurance_document_references(text: str) -> list[dict[str, str]]:
+    references: list[dict[str, str]] = []
+    for label, pattern in (
+        (
+            "endorsement",
+            r"endorsement\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9-]+)",
+        ),
+        (
+            "certificate",
+            r"certificate\s*(?:no\.?|number|#)?\s*[:\-]?\s*([A-Za-z0-9-]+)",
+        ),
+    ):
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            references.append({"type": label, "reference": match.group(1).strip()})
+    return references
+
+
+def _extract_section_entries(
+    text: str, headings: tuple[str, ...], stop_headings: tuple[str, ...]
+) -> list[str]:
+    lines = [line.strip(" •-*\t") for line in text.splitlines()]
+    entries: list[str] = []
+    in_section = False
+    current: list[str] = []
+    heading_pattern = _heading_pattern(headings)
+    stop_pattern = _heading_pattern(stop_headings)
+
+    for line in lines:
+        normalized = line.strip().rstrip(":").lower()
+        if not line.strip():
+            if current:
+                entries.append(" ".join(current).strip())
+                current = []
+            continue
+        if re.fullmatch(heading_pattern, normalized, flags=re.IGNORECASE):
+            in_section = True
+            if current:
+                entries.append(" ".join(current).strip())
+                current = []
+            continue
+        if in_section and re.fullmatch(stop_pattern, normalized, flags=re.IGNORECASE):
+            break
+        if not in_section:
+            continue
+        if _looks_like_new_entry(line) and current:
+            entries.append(" ".join(current).strip())
+            current = []
+        current.append(line.strip())
+
+    if current:
+        entries.append(" ".join(current).strip())
+    return [entry for entry in entries if entry]
+
+
+def _heading_pattern(headings: tuple[str, ...]) -> str:
+    return r"(?:" + "|".join(re.escape(heading) for heading in headings) + r")"
+
+
+def _looks_like_new_entry(line: str) -> bool:
+    return bool(
+        re.search(r"(?:19|20)\d{2}|present|current|ongoing", line, re.IGNORECASE)
+        or re.match(r"[A-Z][A-Za-z .]+\s*[-–—|]", line)
+    )
+
+
+def _looks_like_work_entry(entry: str) -> bool:
+    work_terms = (
+        "engineer",
+        "developer",
+        "manager",
+        "analyst",
+        "consultant",
+        "intern",
+        "designer",
+        "specialist",
+        "architect",
+        "lead",
+    )
+    return bool(
+        _extract_date_range(entry)
+        or any(term in entry.lower() for term in work_terms)
+    )
+
+
+def _extract_degree(entry: str) -> str | None:
+    degree_match = re.search(
+        r"((?:B\.?Sc|M\.?Sc|MBA|PhD|Bachelor|Master|Doctorate|Diploma|Degree|Laurea)"
+        r"[^,;|–—-]*)",
+        entry,
+        flags=re.IGNORECASE,
+    )
+    return degree_match.group(1).strip(" -–—|") if degree_match else None
+
+
+def _extract_institution(entry: str) -> str | None:
+    institution_match = re.search(
+        r"(?:at|from|,|[-–—|])\s*([^,;|]+(?:University|College|Institute|School|Università|Politecnico)[^,;|]*)",
+        entry,
+        flags=re.IGNORECASE,
+    )
+    if institution_match:
+        return institution_match.group(1).strip()
+    university_match = re.search(
+        r"([^,;|]*(?:University|College|Institute|School|Università|Politecnico)[^,;|]*)",
+        entry,
+        flags=re.IGNORECASE,
+    )
+    return university_match.group(1).strip() if university_match else None
+
+
+def _extract_date_range(entry: str) -> str | None:
+    year_range = re.search(
+        r"((?:19|20)\d{2})\s*(?:[-–—]|to)\s*(present|current|ongoing|(?:19|20)\d{2})",
+        entry,
+        flags=re.IGNORECASE,
+    )
+    if year_range:
+        return f"{year_range.group(1).strip()} - {year_range.group(2).strip()}"
+
+    date_pattern = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\w*\s*(?:19|20)\d{2}|present|current|ongoing"
+    match = re.search(
+        rf"({date_pattern})\s*(?:[-–—]|to)\s*({date_pattern})",
+        entry,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return f"{match.group(1).strip()} - {match.group(2).strip()}"
+    single = re.search(date_pattern, entry, flags=re.IGNORECASE)
+    return single.group(0).strip() if single else None
+
+
+def _extract_job_title(entry: str) -> str | None:
+    title_match = re.match(
+        r"([^,;|–—-]+?)\s*(?:[-–—|,]| at )", entry, flags=re.IGNORECASE
+    )
+    if title_match:
+        return title_match.group(1).strip()
+    return None
+
+
+def _extract_company(entry: str) -> str | None:
+    company_match = re.search(
+        r"(?: at |[-–—|,]\s*)([A-Z][A-Za-z0-9 &.'-]{2,}?)(?=\s+(?:19|20)\d{2}|[,|–—-]|$)",
+        entry,
+    )
+    return company_match.group(1).strip() if company_match else None
+
+
+def _split_list_items(text: str) -> list[str]:
+    items: list[str] = []
+    for part in re.split(r"[,;•\n]", text):
+        item = part.strip(" -–—:\t")
+        if 2 <= len(item) <= 60:
+            items.append(item)
+    return _deduplicate_preserving_order(items)
+
+
+def _ordered_keyword_matches(text: str, keywords: tuple[str, ...]) -> list[str]:
+    matches = [
+        keyword
+        for keyword in keywords
+        if re.search(rf"\b{re.escape(keyword)}\b", text, flags=re.IGNORECASE)
+    ]
+    return _deduplicate_preserving_order(matches)
+
+
+def _extract_labeled_date(text: str, labels: tuple[str, ...]) -> str | None:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    return _extract_first(
+        rf"(?:{label_pattern})\s*[:\-]?\s*([A-Za-z]+\s+\d{{1,2}},?\s+\d{{4}}|\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}|\d{{4}}-\d{{2}}-\d{{2}})",
+        text,
+        capture_group=1,
+    )
+
+
+def _extract_money_for_label(text: str, labels: tuple[str, ...]) -> str | None:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    return _extract_first(
+        rf"(?:{label_pattern})\s*[:\-]?\s*((?:CHF|USD|EUR|GBP|\$|€|£)\s?[0-9][0-9'.,]*)",
+        text,
+        capture_group=1,
+    )
+
+
+def _extract_coverage_lines(text: str) -> list[str]:
+    return _extract_labeled_lines(text, ("coverage", "covered", "benefit", "limit"))
+
+
+def _extract_exclusion_lines(text: str) -> list[str]:
+    return _extract_labeled_lines(text, ("exclusion", "excluded", "not covered"))
+
+
+def _extract_labeled_lines(text: str, labels: tuple[str, ...]) -> list[str]:
+    labeled_lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip(" •-*\t")
+        if any(label in stripped.lower() for label in labels):
+            labeled_lines.append(stripped)
+    return _deduplicate_preserving_order(labeled_lines)[:20]
+
+
+def _deduplicate_preserving_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique_items: list[str] = []
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_items.append(item)
+    return unique_items
+
+
+def _without_empty_values(values: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in values.items() if value not in (None, "", [], {})
+    }
 
 
 def _qdrant_point_id(value: str) -> int:
