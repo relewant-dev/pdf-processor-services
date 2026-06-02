@@ -66,15 +66,49 @@ def test_build_candidate_payload_maps_cv_sections_to_structured_fields() -> None
             "description": "Software Engineer - Acme Labs 2021 - Present Built Python services and React dashboards.",
         }
     ]
-    assert payload["education"] == [
+    assert payload["education"] == ["Master of Science in Artificial Intelligence"]
+    assert payload["certification"] == []
+    assert payload["languages"] == []
+    assert payload["competences"]["technical"] == ["python", "react", "sql", "docker"]
+
+
+def test_build_candidate_payload_extracts_profile_lists_and_ignores_personal_dates() -> (
+    None
+):
+    payload = build_candidate_payload(
+        "Curriculum Vitae\n"
+        "Mario Rossi\n"
+        "Experience\n"
+        "2024.09–2024.12 Private Tutor in mathematics and physics\n"
+        "2022.09–present\n"
+        "Date of Birth: 18.02.2002 Place of Birth: Varese, Comerio\n"
+        "Education\n"
+        "Bachelor Degree in Mathematics - University of Milan, 2020 - 2023\n"
+        "Master of Science in Data Science - Politecnico di Milano, 2023 - 2025\n"
+        "Certifications\n"
+        "AWS Certified Cloud Practitioner\n"
+        "First Certificate in English\n"
+        "Languages\n"
+        "Italian - Native\n"
+        "English - B2"
+    )
+
+    assert payload["previous_works"] == [
         {
-            "degree": "Master of Science in Artificial Intelligence",
-            "institution": "Università della Svizzera italiana",
-            "date_range": "2020 - 2022",
-            "description": "Master of Science in Artificial Intelligence - Università della Svizzera italiana, 2020 - 2022",
+            "title": "Private Tutor in mathematics and physics",
+            "date_range": "2024.09 - 2024.12",
+            "description": "2024.09–2024.12 Private Tutor in mathematics and physics",
         }
     ]
-    assert payload["competences"]["technical"] == ["python", "react", "sql", "docker"]
+    assert payload["education"] == [
+        "Bachelor Degree in Mathematics",
+        "Master of Science in Data Science",
+    ]
+    assert payload["certification"] == [
+        "AWS Certified Cloud Practitioner",
+        "First Certificate in English",
+    ]
+    assert payload["languages"] == ["Italian - Native", "English - B2"]
 
 
 def test_build_insurance_payload_extracts_policy_fields() -> None:
@@ -161,9 +195,13 @@ def test_persist_document_if_supported_upserts_cv_payload(
     )
 
     assert domain == "cv"
-    assert calls["upsert_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    assert (
+        calls["upsert_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    )
     assert "upsert_hash" in calls
-    assert calls["upsert_raw_text"] == "Jane Doe\nEmail: jane@example.com\nWork experience"
+    assert (
+        calls["upsert_raw_text"] == "Jane Doe\nEmail: jane@example.com\nWork experience"
+    )
 
 
 def test_persist_document_if_supported_saves_new_insurance(

@@ -100,7 +100,7 @@ Document-processing blueprints include a `cv-reader-agent` for reading CVs, resu
 - `candidate-profile-extraction`
 - `experience-skills-normalization`
 
-The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions.
+The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions. Persisted candidate payloads keep `education` as a list of obtained degrees, `certification` as a list of earned certifications, and `languages` as a list of candidate languages.
 
 ## Rotative logs for MCP tools
 

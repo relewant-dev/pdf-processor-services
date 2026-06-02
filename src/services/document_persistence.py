@@ -62,6 +62,8 @@ def build_candidate_payload(document_text: str) -> dict[str, Any]:
         "competences": _extract_candidate_competences(document_text),
         "previous_works": _extract_candidate_previous_works(document_text),
         "education": _extract_candidate_education(document_text),
+        "certification": _extract_candidate_certifications(document_text),
+        "languages": _extract_candidate_languages(document_text),
         "raw_text": document_text,
         "created_at": _utc_timestamp(),
         "updated_at": _utc_timestamp(),
@@ -134,9 +136,7 @@ def _extract_candidate_name(lines: list[str]) -> str:
             continue
         if "@" in line or re.search(r"\d", line):
             continue
-        if re.search(
-            r"\b(phone|email|address|linkedin|github)\b", line, re.IGNORECASE
-        ):
+        if re.search(r"\b(phone|email|address|linkedin|github)\b", line, re.IGNORECASE):
             continue
         words = [word for word in re.split(r"\s+", line) if word]
         if 2 <= len(words) <= 5:
@@ -144,7 +144,7 @@ def _extract_candidate_name(lines: list[str]) -> str:
     return lines[0] if lines else ""
 
 
-def _extract_candidate_education(text: str) -> list[dict[str, str]]:
+def _extract_candidate_education(text: str) -> list[str]:
     entries = _extract_section_entries(
         text,
         ("education", "academic background", "studies", "formation"),
@@ -161,25 +161,46 @@ def _extract_candidate_education(text: str) -> list[dict[str, str]]:
             "languages",
         ),
     )
-    education: list[dict[str, str]] = []
-    degree_pattern = (
-        r"\b(?:bachelor|master|msc|m\.sc|bsc|b\.sc|phd|doctorate|diploma|"
-        r"degree|laurea|licence|certificate)\b"
+    degrees = [_extract_degree(entry) for entry in entries]
+    return _deduplicate_preserving_order([degree for degree in degrees if degree])
+
+
+def _extract_candidate_certifications(text: str) -> list[str]:
+    entries = _extract_section_lines(
+        text,
+        ("certifications", "certification", "certificates", "licenses", "licences"),
+        (
+            "experience",
+            "work experience",
+            "professional experience",
+            "education",
+            "skills",
+            "technical skills",
+            "competences",
+            "projects",
+            "languages",
+        ),
     )
-    for entry in entries:
-        if not re.search(degree_pattern, entry, re.IGNORECASE):
-            continue
-        education.append(
-            _without_empty_values(
-                {
-                    "degree": _extract_degree(entry),
-                    "institution": _extract_institution(entry),
-                    "date_range": _extract_date_range(entry),
-                    "description": entry,
-                }
-            )
-        )
-    return education
+    return _clean_profile_list_entries(entries)
+
+
+def _extract_candidate_languages(text: str) -> list[str]:
+    entries = _extract_section_lines(
+        text,
+        ("languages", "language"),
+        (
+            "experience",
+            "work experience",
+            "professional experience",
+            "education",
+            "skills",
+            "technical skills",
+            "competences",
+            "certifications",
+            "projects",
+        ),
+    )
+    return _clean_profile_list_entries(entries)
 
 
 def _extract_candidate_previous_works(text: str) -> list[dict[str, str]]:
@@ -347,6 +368,28 @@ def _extract_insurance_document_references(text: str) -> list[dict[str, str]]:
     return references
 
 
+def _extract_section_lines(
+    text: str, headings: tuple[str, ...], stop_headings: tuple[str, ...]
+) -> list[str]:
+    lines = [line.strip(" •-*\t") for line in text.splitlines()]
+    entries: list[str] = []
+    in_section = False
+    heading_pattern = _heading_pattern(headings)
+    stop_pattern = _heading_pattern(stop_headings)
+
+    for line in lines:
+        normalized = line.strip().rstrip(":").lower()
+        if re.fullmatch(heading_pattern, normalized, flags=re.IGNORECASE):
+            in_section = True
+            continue
+        if in_section and re.fullmatch(stop_pattern, normalized, flags=re.IGNORECASE):
+            break
+        if in_section and line.strip():
+            entries.append(line.strip())
+
+    return entries
+
+
 def _extract_section_entries(
     text: str, headings: tuple[str, ...], stop_headings: tuple[str, ...]
 ) -> list[str]:
@@ -396,6 +439,14 @@ def _looks_like_new_entry(line: str) -> bool:
 
 
 def _looks_like_work_entry(entry: str) -> bool:
+    if re.search(
+        r"\b(date of birth|place of birth|birth|nationality)\b", entry, re.IGNORECASE
+    ):
+        return False
+    normalized_entry = _strip_leading_date_range(entry)
+    if not re.search(r"[A-Za-z]", normalized_entry):
+        return False
+
     work_terms = (
         "engineer",
         "developer",
@@ -407,10 +458,14 @@ def _looks_like_work_entry(entry: str) -> bool:
         "specialist",
         "architect",
         "lead",
+        "tutor",
+        "teacher",
+        "assistant",
+        "researcher",
     )
+    has_work_term = any(term in normalized_entry.lower() for term in work_terms)
     return bool(
-        _extract_date_range(entry)
-        or any(term in entry.lower() for term in work_terms)
+        has_work_term or (_extract_date_range(entry) and _extract_job_title(entry))
     )
 
 
@@ -441,15 +496,7 @@ def _extract_institution(entry: str) -> str | None:
 
 
 def _extract_date_range(entry: str) -> str | None:
-    year_range = re.search(
-        r"((?:19|20)\d{2})\s*(?:[-–—]|to)\s*(present|current|ongoing|(?:19|20)\d{2})",
-        entry,
-        flags=re.IGNORECASE,
-    )
-    if year_range:
-        return f"{year_range.group(1).strip()} - {year_range.group(2).strip()}"
-
-    date_pattern = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\w*\s*(?:19|20)\d{2}|present|current|ongoing"
+    date_pattern = _date_token_pattern()
     match = re.search(
         rf"({date_pattern})\s*(?:[-–—]|to)\s*({date_pattern})",
         entry,
@@ -457,25 +504,74 @@ def _extract_date_range(entry: str) -> str | None:
     )
     if match:
         return f"{match.group(1).strip()} - {match.group(2).strip()}"
-    single = re.search(date_pattern, entry, flags=re.IGNORECASE)
-    return single.group(0).strip() if single else None
-
-
-def _extract_job_title(entry: str) -> str | None:
-    title_match = re.match(
-        r"([^,;|–—-]+?)\s*(?:[-–—|,]| at )", entry, flags=re.IGNORECASE
-    )
-    if title_match:
-        return title_match.group(1).strip()
     return None
 
 
-def _extract_company(entry: str) -> str | None:
-    company_match = re.search(
-        r"(?: at |[-–—|,]\s*)([A-Z][A-Za-z0-9 &.'-]{2,}?)(?=\s+(?:19|20)\d{2}|[,|–—-]|$)",
+def _date_token_pattern() -> str:
+    return (
+        r"(?:present|current|ongoing|"
+        r"(?:19|20)\d{2}(?:[./-](?:1[0-2]|0?[1-9]))?|"
+        r"(?:1[0-2]|0?[1-9])[./-](?:19|20)\d{2}|"
+        r"(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+)?(?:19|20)\d{2})"
+    )
+
+
+def _strip_leading_date_range(entry: str) -> str:
+    date_pattern = _date_token_pattern()
+    return re.sub(
+        rf"^\s*{date_pattern}\s*(?:[-–—]|to)\s*{date_pattern}\s*[,|:;-]?\s*",
+        "",
         entry,
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _extract_job_title(entry: str) -> str | None:
+    normalized_entry = _strip_leading_date_range(entry)
+    if not normalized_entry or not re.search(r"[A-Za-z]", normalized_entry):
+        return None
+    title_match = re.match(
+        r"([^,;|–—-]+?)\s*(?:[-–—|,]| at )",
+        normalized_entry,
+        flags=re.IGNORECASE,
+    )
+    if title_match:
+        title = title_match.group(1).strip()
+        return title if not _looks_like_date_only(title) else None
+    sentence_match = re.match(r"(.+?)(?:\s{2,}|\.\s|$)", normalized_entry)
+    title = sentence_match.group(1).strip() if sentence_match else normalized_entry
+    return title if title and not _looks_like_date_only(title) else None
+
+
+def _extract_company(entry: str) -> str | None:
+    normalized_entry = _strip_leading_date_range(entry)
+    company_match = re.search(
+        r"(?: at |[-–—|,]\s*)([A-Z][A-Za-z0-9 &.'-]{2,}?)(?=\s+(?:(?:19|20)\d{2})|[,|–—-]|$)",
+        normalized_entry,
     )
     return company_match.group(1).strip() if company_match else None
+
+
+def _looks_like_date_only(value: str) -> bool:
+    return bool(
+        re.fullmatch(rf"{_date_token_pattern()}", value.strip(), flags=re.IGNORECASE)
+    )
+
+
+def _clean_profile_list_entries(entries: list[str]) -> list[str]:
+    cleaned_items: list[str] = []
+    for entry in entries:
+        candidate_items = _split_list_items(entry)
+        if not candidate_items:
+            candidate_items = [entry.strip()]
+        for item in candidate_items:
+            cleaned = re.sub(r"^[-•*\s]+", "", item).strip(" -–—:\t")
+            if cleaned and not re.fullmatch(
+                r"(?:certifications?|languages?)", cleaned, flags=re.IGNORECASE
+            ):
+                cleaned_items.append(cleaned)
+    return _deduplicate_preserving_order(cleaned_items)
 
 
 def _split_list_items(text: str) -> list[str]:
