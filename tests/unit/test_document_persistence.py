@@ -111,6 +111,41 @@ def test_build_candidate_payload_extracts_profile_lists_and_ignores_personal_dat
     assert payload["languages"] == ["Italian - Native", "English - B2"]
 
 
+def test_build_candidate_payload_normalizes_hyphenated_roles_and_inline_profile_sections() -> None:
+    payload = build_candidate_payload(
+        "Curriculum Vitae\n"
+        "Mario Rossi\n"
+        "Experience\n"
+        "Software Engineer at Relewant – Chiasso\n"
+        "2026.01 - present\n"
+        "Developing an application that computes the derivative of functions.\n"
+        "Full-stack Engineer at Purest Ltd – Lugano (Switzerland)\n"
+        "2024.09 - 2024.12 Private Tutor in mathematics and physics\n"
+        "Certifications: AWS Certified Cloud Practitioner - Amazon Web Services, 2025\n"
+        "Languages: Italian - Native, English - B2"
+    )
+
+    assert payload["previous_works"] == [
+        {
+            "title": "Software Engineer",
+            "company": "Relewant",
+            "description": "Software Engineer at Relewant – Chiasso",
+        },
+        {
+            "title": "Full-stack Engineer",
+            "company": "Purest Ltd",
+            "description": "Full-stack Engineer at Purest Ltd – Lugano (Switzerland)",
+        },
+        {
+            "title": "Private Tutor in mathematics and physics",
+            "date_range": "2024.09 - 2024.12",
+            "description": "2024.09 - 2024.12 Private Tutor in mathematics and physics",
+        },
+    ]
+    assert payload["certification"] == ["AWS Certified Cloud Practitioner"]
+    assert payload["languages"] == ["Italian - Native", "English - B2"]
+
+
 def test_build_insurance_payload_extracts_policy_fields() -> None:
     payload = build_insurance_payload(
         "Policy Number: POL-001\nProvider: Acme Insurance\nStatus: active\nHealth coverage"
