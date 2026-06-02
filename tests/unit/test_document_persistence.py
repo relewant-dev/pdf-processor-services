@@ -42,6 +42,41 @@ def test_build_candidate_payload_extracts_contact_fields() -> None:
     assert payload["seniority"] == "senior"
 
 
+def test_build_candidate_payload_maps_cv_sections_to_structured_fields() -> None:
+    payload = build_candidate_payload(
+        "Curriculum Vitae\n"
+        "Jane Doe\n"
+        "Email: jane@example.com\n"
+        "Experience\n"
+        "Software Engineer - Acme Labs 2021 - Present\n"
+        "Built Python services and React dashboards.\n"
+        "Education\n"
+        "Master of Science in Artificial Intelligence - Università della Svizzera italiana, 2020 - 2022\n"
+        "Skills\n"
+        "Python, React, SQL, Docker"
+    )
+
+    assert payload["first_name"] == "Jane"
+    assert payload["last_name"] == "Doe"
+    assert payload["previous_works"] == [
+        {
+            "title": "Software Engineer",
+            "company": "Acme Labs",
+            "date_range": "2021 - Present",
+            "description": "Software Engineer - Acme Labs 2021 - Present Built Python services and React dashboards.",
+        }
+    ]
+    assert payload["education"] == [
+        {
+            "degree": "Master of Science in Artificial Intelligence",
+            "institution": "Università della Svizzera italiana",
+            "date_range": "2020 - 2022",
+            "description": "Master of Science in Artificial Intelligence - Università della Svizzera italiana, 2020 - 2022",
+        }
+    ]
+    assert payload["competences"]["technical"] == ["python", "react", "sql", "docker"]
+
+
 def test_build_insurance_payload_extracts_policy_fields() -> None:
     payload = build_insurance_payload(
         "Policy Number: POL-001\nProvider: Acme Insurance\nStatus: active\nHealth coverage"
@@ -51,6 +86,35 @@ def test_build_insurance_payload_extracts_policy_fields() -> None:
     assert payload["provider_name"] == "Acme Insurance"
     assert payload["status"] == "active"
     assert payload["insurance_type"] == "health"
+
+
+def test_build_insurance_payload_maps_policy_fields_to_coverage_details() -> None:
+    payload = build_insurance_payload(
+        "Acme Insurance\n"
+        "Policy Number: POL-001\n"
+        "Policyholder: Jane Doe\n"
+        "Effective Date: 01/01/2026\n"
+        "Expiration Date: 31/12/2026\n"
+        "Premium: CHF 1'200.00\n"
+        "Deductible: CHF 500\n"
+        "Coverage Limit: CHF 100'000\n"
+        "Coverage: emergency health care\n"
+        "Exclusion: pre-existing conditions\n"
+        "Endorsement No. END-42"
+    )
+
+    assert payload["provider_name"] == "Acme Insurance"
+    assert payload["coverage_details"] == {
+        "policyholder": "Jane Doe",
+        "effective_date": "01/01/2026",
+        "expiration_date": "31/12/2026",
+        "premium": "CHF 1'200.00",
+        "deductible": "CHF 500",
+        "coverage_limit": "CHF 100'000",
+        "coverages": ["Coverage Limit: CHF 100'000", "Coverage: emergency health care"],
+        "exclusions": ["Exclusion: pre-existing conditions"],
+    }
+    assert payload["documents"] == [{"type": "endorsement", "reference": "END-42"}]
 
 
 def test_build_candidate_payload_uses_stable_document_identity() -> None:
@@ -75,25 +139,18 @@ def test_build_insurance_payload_uses_stable_unknown_policy_number() -> None:
     assert first_payload["insurance_number"] == second_payload["insurance_number"]
 
 
-def test_persist_document_if_supported_skips_existing_cv(
+def test_persist_document_if_supported_upserts_cv_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
-
-    async def fake_document_exists(
-        collection_name: str, payload: dict[str, object]
-    ) -> bool:
-        calls["exists_collection"] = collection_name
-        calls["exists_hash"] = payload["document_hash"]
-        calls["exists_raw_text"] = payload["raw_text"]
-        return True
 
     async def fake_upsert_payload(
         collection_name: str, payload: dict[str, object]
     ) -> None:
         calls["upsert_collection"] = collection_name
+        calls["upsert_hash"] = payload["document_hash"]
+        calls["upsert_raw_text"] = payload["raw_text"]
 
-    monkeypatch.setattr(document_persistence, "_document_exists", fake_document_exists)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
     domain = asyncio.run(
@@ -104,11 +161,9 @@ def test_persist_document_if_supported_skips_existing_cv(
     )
 
     assert domain == "cv"
-    assert (
-        calls["exists_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
-    )
-    assert "exists_hash" in calls
-    assert "upsert_collection" not in calls
+    assert calls["upsert_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    assert "upsert_hash" in calls
+    assert calls["upsert_raw_text"] == "Jane Doe\nEmail: jane@example.com\nWork experience"
 
 
 def test_persist_document_if_supported_saves_new_insurance(
@@ -116,21 +171,12 @@ def test_persist_document_if_supported_saves_new_insurance(
 ) -> None:
     calls: dict[str, object] = {}
 
-    async def fake_document_exists(
-        collection_name: str, payload: dict[str, object]
-    ) -> bool:
-        calls["exists_collection"] = collection_name
-        calls["exists_hash"] = payload["document_hash"]
-        calls["exists_raw_text"] = payload["raw_text"]
-        return False
-
     async def fake_upsert_payload(
         collection_name: str, payload: dict[str, object]
     ) -> None:
         calls["upsert_collection"] = collection_name
         calls["upsert_hash"] = payload["document_hash"]
 
-    monkeypatch.setattr(document_persistence, "_document_exists", fake_document_exists)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
     domain = asyncio.run(
@@ -142,9 +188,6 @@ def test_persist_document_if_supported_saves_new_insurance(
 
     assert domain == "insurance"
     assert (
-        calls["exists_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
-    )
-    assert (
         calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
     )
-    assert calls["upsert_hash"] == calls["exists_hash"]
+    assert "upsert_hash" in calls
