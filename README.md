@@ -55,8 +55,8 @@ To evolve this service into a smart IDE backend, prefer the following architectu
 - `src/config.py`: environment parsing and runtime settings.
 - `src/logging_config.py`: rotating log setup.
 - `src/clients/ollama.py`: Ollama HTTP client adapter.
-- `src/tools/backend.py`: backend planning/routing tool logic.
-- `src/domain/blueprints.py`: stack blueprint registry and resolution.
+- `src/tools/blueprints.py`: document-processing blueprint and routing tool logic.
+- `src/domain/blueprints.py`: document-processing blueprint registry.
 - `src/clients/`: adapters for LLM providers (starting with Ollama).
 - `src/tools/`: MCP tool definitions grouped by capability.
 - `src/prompts/`: reusable prompt templates and prompt builders.
@@ -135,7 +135,7 @@ If you still get timeouts, try reducing prompt size by passing `max_chars` in `p
 
 ## Frontend prompt router API
 
-The HTTP API exposes prompt execution plus PDF upload endpoints. For prompts, the frontend sends only the user message in the JSON body as `{"message":"prompt"}`; the service routes that message to the correct backend, document, health, or general chat tool, uses the inferred tool and related skills as Ollama context, and returns only the model answer as `{"response":"result of the prompt"}`. For PDFs, the frontend sends `multipart/form-data` with a PDF file and question, and receives an Ollama answer based on the uploaded document content.
+The HTTP API exposes prompt execution plus PDF upload endpoints. For prompts, the frontend sends only the user message in the JSON body as `{"message":"prompt"}`; the service routes that message to the correct document, health, or general chat tool, uses the inferred tool and related skills as Ollama context when applicable, and returns only the model answer as `{"response":"result of the prompt"}`. For PDFs, the frontend sends `multipart/form-data` with a PDF file and question, and receives an Ollama answer based on the uploaded document content.
 
 ### Run the HTTP API locally
 

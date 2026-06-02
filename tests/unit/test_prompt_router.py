@@ -16,11 +16,11 @@ from services.prompt_router import (
 )
 
 
-def test_route_prompt_detects_backend_intent() -> None:
+def test_route_prompt_leaves_backend_generation_as_chat() -> None:
     route = route_prompt("Create a Python FastAPI backend")
 
-    assert route.category == "backend"
-    assert route.tool_name == "resolve_backend_skill"
+    assert route.category == "chat"
+    assert route.tool_name == "send_prompt"
 
 
 def test_route_prompt_detects_document_intent() -> None:
@@ -50,14 +50,14 @@ def test_route_prompt_rejects_blank_prompt() -> None:
 
 
 @pytest.mark.anyio
-async def test_execute_prompt_tool_calls_inferred_backend_tool(
+async def test_execute_prompt_tool_sends_backend_generation_to_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_prompts: list[str] = []
 
     async def fake_chat_with_ollama(prompt: str) -> str:
         captured_prompts.append(prompt)
-        return "generated backend result"
+        return "general chat result"
 
     monkeypatch.setattr(
         "services.prompt_router.chat_with_ollama", fake_chat_with_ollama
@@ -67,11 +67,8 @@ async def test_execute_prompt_tool_calls_inferred_backend_tool(
         PromptExecutionRequest(message="Build Node API with Express and TypeScript")
     )
 
-    assert response.response == "generated backend result"
-    assert len(captured_prompts) == 1
-    assert "resolve_backend_skill" in captured_prompts[0]
-    assert "node_express_typescript" in captured_prompts[0]
-    assert "generate-express-typescript-backend" in captured_prompts[0]
+    assert response.response == "general chat result"
+    assert captured_prompts == ["Build Node API with Express and TypeScript"]
 
 
 @pytest.mark.anyio
