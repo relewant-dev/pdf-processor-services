@@ -181,7 +181,10 @@ def _extract_candidate_certifications(text: str) -> list[str]:
             "languages",
         ),
     )
-    return _clean_profile_list_entries(entries)
+    certification_names = [
+        name for entry in entries if (name := _extract_certification_name(entry))
+    ]
+    return _deduplicate_preserving_order(certification_names)
 
 
 def _extract_candidate_languages(text: str) -> list[str]:
@@ -374,15 +377,15 @@ def _extract_section_lines(
     lines = [line.strip(" •-*\t") for line in text.splitlines()]
     entries: list[str] = []
     in_section = False
-    heading_pattern = _heading_pattern(headings)
-    stop_pattern = _heading_pattern(stop_headings)
 
     for line in lines:
-        normalized = line.strip().rstrip(":").lower()
-        if re.fullmatch(heading_pattern, normalized, flags=re.IGNORECASE):
+        heading_content = _extract_heading_content(line, headings)
+        if heading_content is not None:
             in_section = True
+            if heading_content:
+                entries.append(heading_content)
             continue
-        if in_section and re.fullmatch(stop_pattern, normalized, flags=re.IGNORECASE):
+        if in_section and _extract_heading_content(line, stop_headings) is not None:
             break
         if in_section and line.strip():
             entries.append(line.strip())
@@ -397,23 +400,23 @@ def _extract_section_entries(
     entries: list[str] = []
     in_section = False
     current: list[str] = []
-    heading_pattern = _heading_pattern(headings)
-    stop_pattern = _heading_pattern(stop_headings)
 
     for line in lines:
-        normalized = line.strip().rstrip(":").lower()
         if not line.strip():
             if current:
                 entries.append(" ".join(current).strip())
                 current = []
             continue
-        if re.fullmatch(heading_pattern, normalized, flags=re.IGNORECASE):
+        heading_content = _extract_heading_content(line, headings)
+        if heading_content is not None:
             in_section = True
             if current:
                 entries.append(" ".join(current).strip())
                 current = []
+            if heading_content:
+                current.append(heading_content)
             continue
-        if in_section and re.fullmatch(stop_pattern, normalized, flags=re.IGNORECASE):
+        if in_section and _extract_heading_content(line, stop_headings) is not None:
             break
         if not in_section:
             continue
@@ -429,6 +432,21 @@ def _extract_section_entries(
 
 def _heading_pattern(headings: tuple[str, ...]) -> str:
     return r"(?:" + "|".join(re.escape(heading) for heading in headings) + r")"
+
+
+def _extract_heading_content(line: str, headings: tuple[str, ...]) -> str | None:
+    stripped_line = line.strip()
+    if not stripped_line:
+        return None
+    heading_pattern = _heading_pattern(headings)
+    match = re.match(
+        rf"^\s*{heading_pattern}\s*(?::\s*(.*))?$",
+        stripped_line,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return (match.group(1) or "").strip()
+    return None
 
 
 def _looks_like_new_entry(line: str) -> bool:
@@ -463,10 +481,7 @@ def _looks_like_work_entry(entry: str) -> bool:
         "assistant",
         "researcher",
     )
-    has_work_term = any(term in normalized_entry.lower() for term in work_terms)
-    return bool(
-        has_work_term or (_extract_date_range(entry) and _extract_job_title(entry))
-    )
+    return any(term in normalized_entry.lower() for term in work_terms)
 
 
 def _extract_degree(entry: str) -> str | None:
@@ -532,12 +547,12 @@ def _extract_job_title(entry: str) -> str | None:
     if not normalized_entry or not re.search(r"[A-Za-z]", normalized_entry):
         return None
     title_match = re.match(
-        r"([^,;|–—-]+?)\s*(?:[-–—|,]| at )",
+        r"(.+?)(?:\s+(?:[-–—|,]|at)\s+)",
         normalized_entry,
         flags=re.IGNORECASE,
     )
     if title_match:
-        title = title_match.group(1).strip()
+        title = title_match.group(1).strip(" -–—|,")
         return title if not _looks_like_date_only(title) else None
     sentence_match = re.match(r"(.+?)(?:\s{2,}|\.\s|$)", normalized_entry)
     title = sentence_match.group(1).strip() if sentence_match else normalized_entry
@@ -551,6 +566,29 @@ def _extract_company(entry: str) -> str | None:
         normalized_entry,
     )
     return company_match.group(1).strip() if company_match else None
+
+
+def _extract_certification_name(entry: str) -> str | None:
+    cleaned = _strip_leading_date_range(entry).strip(" -–—:|,\t")
+    if not cleaned:
+        return None
+    cleaned = re.sub(
+        r"\s+\b(?:issued by|issuer|provider)\b\s+.*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+\b(?:19|20)\d{2}\b.*$", "", cleaned).strip(" -–—:|,\t")
+    separator_match = re.match(r"(.+?)\s+(?:[-–—|])\s+", cleaned)
+    if separator_match:
+        cleaned = separator_match.group(1).strip(" -–—:|,\t")
+    if not cleaned or re.fullmatch(
+        r"(?:certifications?|certificates?|licenses?|licences?)",
+        cleaned,
+        flags=re.IGNORECASE,
+    ):
+        return None
+    return cleaned
 
 
 def _looks_like_date_only(value: str) -> bool:
