@@ -6,8 +6,11 @@ from services import document_persistence
 from services.document_persistence import (
     build_candidate_payload,
     build_insurance_payload,
+    build_vector_db_metadata,
+    build_vector_db_records,
     infer_pdf_domain,
     persist_document_if_supported,
+    persist_extracted_payload,
 )
 
 
@@ -264,3 +267,135 @@ def test_persist_document_if_supported_saves_new_insurance(
         calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
     )
     assert "upsert_hash" in calls
+
+
+def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None:
+    payload = {
+        "id": "insurance-ai-1",
+        "insurance_number": "AI-POL-999",
+        "insurance_type": "dental",
+        "provider_name": "Payload Mutual",
+        "status": "pending_review",
+        "coverage_details": {"coverages": ["orthodontics"]},
+        "documents": [{"type": "policy", "reference": "DOC-7"}],
+        "raw_text": "Extracted policy text",
+    }
+
+    metadata = build_vector_db_metadata(payload, metadata_kind="insurance")
+
+    assert metadata["insurance_number"] == "AI-POL-999"
+    assert metadata["insurance_type"] == "dental"
+    assert metadata["provider_name"] == "Payload Mutual"
+    assert metadata["status"] == "pending_review"
+    assert metadata["coverage_details"] == {"coverages": ["orthodontics"]}
+    assert metadata["documents"] == [{"type": "policy", "reference": "DOC-7"}]
+
+
+def test_build_vector_metadata_allows_missing_optional_insurance_fields() -> None:
+    metadata = build_vector_db_metadata(
+        {"id": "insurance-ai-2", "raw_text": "No optional values extracted"},
+        metadata_kind="insurance",
+    )
+
+    assert metadata["insurance_number"] is None
+    assert metadata["insurance_type"] is None
+    assert metadata["provider_name"] is None
+    assert metadata["status"] is None
+    assert metadata["coverage_details"] is None
+    assert metadata["documents"] == []
+
+
+def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None:
+    payload = {
+        "id": "candidate-ai-1",
+        "first_name": "Amina",
+        "last_name": "Payload",
+        "seniority": "principal",
+        "competences": {"technical": ["rust", "python"]},
+        "education": ["MSc Computer Science"],
+        "certification": ["Kubernetes Administrator"],
+        "languages": ["English", "French"],
+        "raw_text": "Candidate profile",
+    }
+
+    metadata = build_vector_db_metadata(payload, metadata_kind="candidate")
+
+    assert metadata["first_name"] == "Amina"
+    assert metadata["last_name"] == "Payload"
+    assert metadata["seniority"] == "principal"
+    assert metadata["competences"] == {"technical": ["rust", "python"]}
+    assert metadata["education"] == ["MSc Computer Science"]
+    assert metadata["certification"] == ["Kubernetes Administrator"]
+    assert metadata["languages"] == ["English", "French"]
+
+
+def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> None:
+    metadata = build_vector_db_metadata(
+        {"id": "candidate-ai-2", "raw_text": "No optional values extracted"},
+        metadata_kind="candidate",
+    )
+
+    assert metadata["first_name"] is None
+    assert metadata["last_name"] is None
+    assert metadata["email"] is None
+    assert metadata["phone"] is None
+    assert metadata["seniority"] is None
+    assert metadata["competences"] is None
+    assert metadata["previous_works"] == []
+    assert metadata["education"] == []
+    assert metadata["certification"] == []
+    assert metadata["languages"] == []
+
+
+def test_build_vector_records_chunks_embedding_text_without_changing_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(document_persistence, "VECTOR_DB_CHUNK_SIZE", 5)
+    records = build_vector_db_records(
+        {
+            "id": "candidate-ai-3",
+            "first_name": "Chunky",
+            "raw_text": "abcdefghijk",
+        },
+        metadata_kind="candidate",
+    )
+
+    assert len(records) == 3
+    assert [record.payload["first_name"] for record in records] == [
+        "Chunky",
+        "Chunky",
+        "Chunky",
+    ]
+    assert [record.payload["chunk_index"] for record in records] == [0, 1, 2]
+    assert [record.payload["chunk_count"] for record in records] == [3, 3, 3]
+
+
+def test_persist_extracted_payload_upserts_payload_metadata_without_semantic_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_upsert_records(collection_name: str, records: list[object]) -> None:
+        captured["collection_name"] = collection_name
+        captured["payload"] = records[0].payload
+
+    monkeypatch.setattr(document_persistence, "_upsert_records", fake_upsert_records)
+
+    asyncio.run(
+        persist_extracted_payload(
+            "insurances",
+            {
+                "id": "insurance-ai-4",
+                "insurance_type": "vision",
+                "status": "requires_human_review",
+                "raw_text": "Vision policy",
+            },
+            metadata_kind="insurance",
+        )
+    )
+
+    assert captured["collection_name"] == "insurances"
+    assert captured["payload"]["insurance_type"] == "vision"
+    assert captured["payload"]["status"] == "requires_human_review"
+    assert captured["payload"]["insurance_number"] is None
+    assert captured["payload"]["provider_name"] is None

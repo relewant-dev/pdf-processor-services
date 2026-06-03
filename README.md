@@ -183,7 +183,7 @@ curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
 
 Successful responses contain only the Ollama answer as `{"response":"result based on the uploaded PDF"}`.
 
-When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts a Qdrant payload in the configured `candidates` or `insurances` collection. In addition to `raw_text`, the persistence layer maps detected CV sections into candidate fields such as `education`, `previous_works`, and `competences`, and maps detected insurance policy facts into `coverage_details`, `documents`, `provider_name`, `insurance_number`, `insurance_type`, and `status`. Missing fields remain empty or `unknown` instead of being guessed.
+When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts vector DB records in the configured `candidates` or `insurances` collection. The vector DB save workflow receives an already-extracted payload, validates it against metadata schemas, optionally splits long `raw_text` into chunk records, and persists the resulting metadata without assigning semantic defaults such as candidate names, statuses, insurance types, or skills inside the save layer. Missing optional metadata fields remain `None` or empty lists unless the extracted payload itself contains a value.
 
 ### POST `/api/prompts/execute`
 
