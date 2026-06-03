@@ -1,306 +1,183 @@
 import asyncio
+import json
 
 import pytest
 
 from services import document_persistence
 from services.document_persistence import (
-    build_candidate_payload,
-    build_insurance_payload,
+    CandidateVectorMetadata,
+    InsuranceVectorMetadata,
+    VectorDbMetadataError,
+    build_payload_with_ollama,
     build_vector_db_metadata,
     build_vector_db_records,
-    infer_pdf_domain,
+    infer_pdf_domain_with_ollama,
     persist_document_if_supported,
     persist_extracted_payload,
 )
 
 
-def test_infer_pdf_domain_detects_cv() -> None:
-    assert (
-        infer_pdf_domain("Work experience and education", "Summarize this CV") == "cv"
+def test_removed_regex_metadata_builders_are_not_available() -> None:
+    removed_names = (
+        "infer_pdf_domain",
+        "build_candidate_payload",
+        "build_insurance_payload",
+        "_extract_candidate_name",
+        "_extract_candidate_education",
+        "_extract_candidate_certifications",
+        "_extract_candidate_previous_works",
+        "_extract_candidate_competences",
+        "_extract_insurance_provider_name",
+        "_extract_insurance_coverage_details",
+        "_detect_insurance_type",
     )
 
+    for name in removed_names:
+        assert not hasattr(document_persistence, name)
 
-def test_infer_pdf_domain_detects_insurance() -> None:
-    assert (
-        infer_pdf_domain("Policy number 123", "Explain insurance coverage")
-        == "insurance"
+
+def test_build_metadata_extraction_prompt_contains_strict_schema_instructions() -> None:
+    prompt = document_persistence._build_metadata_extraction_prompt(
+        "Jane Doe\nEmail: jane@example.com",
+        "candidate",
+        CandidateVectorMetadata,
     )
 
-
-def test_infer_pdf_domain_returns_other_for_unsupported_documents() -> None:
-    assert (
-        infer_pdf_domain("Quarterly revenue and EBITDA", "Summarize this report")
-        == "other"
-    )
-
-
-def test_build_candidate_payload_extracts_contact_fields() -> None:
-    payload = build_candidate_payload(
-        "Jane Doe\nEmail: jane@example.com\nPhone: +1 202 555 0110\nSenior engineer"
-    )
-
-    assert payload["first_name"] == "Jane"
-    assert payload["last_name"] == "Doe"
-    assert payload["email"] == "jane@example.com"
-    assert payload["seniority"] == "senior"
+    assert "You are an information extraction system." in prompt
+    assert "Extract values only if explicitly supported by the document." in prompt
+    assert "Do not infer or invent information." in prompt
+    assert "Return only valid JSON." in prompt
+    assert "Missing scalar values must be null. Missing arrays must be []." in prompt
+    assert "Populate all fields defined in the schema." in prompt
+    assert "The document may be written in any language." in prompt
+    assert '"first_name"' in prompt
+    assert '"previous_works"' in prompt
+    assert "Jane Doe" in prompt
 
 
-def test_build_candidate_payload_maps_cv_sections_to_structured_fields() -> None:
-    payload = build_candidate_payload(
-        "Curriculum Vitae\n"
-        "Jane Doe\n"
-        "Email: jane@example.com\n"
-        "Experience\n"
-        "Software Engineer - Acme Labs 2021 - Present\n"
-        "Built Python services and React dashboards.\n"
-        "Education\n"
-        "Master of Science in Artificial Intelligence - Università della Svizzera italiana, 2020 - 2022\n"
-        "Skills\n"
-        "Python, React, SQL, Docker"
-    )
-
-    assert payload["first_name"] == "Jane"
-    assert payload["last_name"] == "Doe"
-    assert payload["previous_works"] == [
-        {
-            "title": "Software Engineer",
-            "company": "Acme Labs",
-            "date_range": "2021 - Present",
-            "description": "Software Engineer - Acme Labs 2021 - Present Built Python services and React dashboards.",
-        }
-    ]
-    assert payload["education"] == ["Master of Science in Artificial Intelligence"]
-    assert payload["certification"] == []
-    assert payload["languages"] == []
-    assert payload["competences"]["technical"] == ["python", "react", "sql", "docker"]
-
-
-def test_build_candidate_payload_extracts_profile_lists_and_ignores_personal_dates() -> (
-    None
-):
-    payload = build_candidate_payload(
-        "Curriculum Vitae\n"
-        "Mario Rossi\n"
-        "Experience\n"
-        "2024.09–2024.12 Private Tutor in mathematics and physics\n"
-        "2022.09–present\n"
-        "Date of Birth: 18.02.2002 Place of Birth: Varese, Comerio\n"
-        "Education\n"
-        "Bachelor Degree in Mathematics - University of Milan, 2020 - 2023\n"
-        "Master of Science in Data Science - Politecnico di Milano, 2023 - 2025\n"
-        "Certifications\n"
-        "AWS Certified Cloud Practitioner\n"
-        "First Certificate in English\n"
-        "Languages\n"
-        "Italian - Native\n"
-        "English - B2"
-    )
-
-    assert payload["previous_works"] == [
-        {
-            "title": "Private Tutor in mathematics and physics",
-            "date_range": "2024.09 - 2024.12",
-            "description": "2024.09–2024.12 Private Tutor in mathematics and physics",
-        }
-    ]
-    assert payload["education"] == [
-        "Bachelor Degree in Mathematics",
-        "Master of Science in Data Science",
-    ]
-    assert payload["certification"] == [
-        "AWS Certified Cloud Practitioner",
-        "First Certificate in English",
-    ]
-    assert payload["languages"] == ["Italian - Native", "English - B2"]
-
-
-def test_build_candidate_payload_normalizes_hyphenated_roles_and_inline_profile_sections() -> None:
-    payload = build_candidate_payload(
-        "Curriculum Vitae\n"
-        "Mario Rossi\n"
-        "Experience\n"
-        "Software Engineer at Relewant – Chiasso\n"
-        "2026.01 - present\n"
-        "Developing an application that computes the derivative of functions.\n"
-        "Full-stack Engineer at Purest Ltd – Lugano (Switzerland)\n"
-        "2024.09 - 2024.12 Private Tutor in mathematics and physics\n"
-        "Certifications: AWS Certified Cloud Practitioner - Amazon Web Services, 2025\n"
-        "Languages: Italian - Native, English - B2"
-    )
-
-    assert payload["previous_works"] == [
-        {
-            "title": "Software Engineer",
-            "company": "Relewant",
-            "description": "Software Engineer at Relewant – Chiasso",
-        },
-        {
-            "title": "Full-stack Engineer",
-            "company": "Purest Ltd",
-            "description": "Full-stack Engineer at Purest Ltd – Lugano (Switzerland)",
-        },
-        {
-            "title": "Private Tutor in mathematics and physics",
-            "date_range": "2024.09 - 2024.12",
-            "description": "2024.09 - 2024.12 Private Tutor in mathematics and physics",
-        },
-    ]
-    assert payload["certification"] == ["AWS Certified Cloud Practitioner"]
-    assert payload["languages"] == ["Italian - Native", "English - B2"]
-
-
-def test_build_insurance_payload_extracts_policy_fields() -> None:
-    payload = build_insurance_payload(
-        "Policy Number: POL-001\nProvider: Acme Insurance\nStatus: active\nHealth coverage"
-    )
-
-    assert payload["policy_number"] == "POL-001"
-    assert payload["insurance_provider"] == "Acme Insurance"
-    assert payload["insurance_type"] == "health"
-    assert payload["currency"] == "EUR"
-    assert payload["premium_amount"] == 0.0
-
-
-def test_build_insurance_payload_maps_policy_fields_to_coverage_details() -> None:
-    payload = build_insurance_payload(
-        "Acme Insurance\n"
-        "Policy Number: POL-001\n"
-        "Policyholder: Jane Doe\n"
-        "Effective Date: 01/01/2026\n"
-        "Expiration Date: 31/12/2026\n"
-        "Premium: CHF 1'200.00\n"
-        "Deductible: CHF 500\n"
-        "Coverage Limit: CHF 100'000\n"
-        "Coverage: emergency health care\n"
-        "Exclusion: pre-existing conditions\n"
-        "Endorsement No. END-42"
-    )
-
-    assert payload["insurance_provider"] == "Acme Insurance"
-    assert payload["policy_holder"] == {"first_name": "Jane", "last_name": "Doe"}
-    assert payload["start_date"] == "2026-01-01"
-    assert payload["end_date"] == "2026-12-31"
-    assert payload["premium_amount"] == 1200.0
-    assert payload["currency"] == "CHF"
-    assert payload["coverage_details"] == {
-        "coverage_limit": 100000.0,
-        "deductible": "CHF 500",
-        "coverages": ["Coverage Limit: CHF 100'000", "Coverage: emergency health care"],
-        "exclusions": ["Exclusion: pre-existing conditions"],
-    }
-
-
-def test_build_candidate_payload_uses_stable_document_identity() -> None:
-    first_payload = build_candidate_payload(
-        "Jane Doe\nEmail: jane@example.com\nSenior engineer"
-    )
-    second_payload = build_candidate_payload(
-        " Jane Doe \n\n Email: jane@example.com \n Senior engineer "
-    )
-
-    assert first_payload["document_hash"] == second_payload["document_hash"]
-    assert first_payload["id"] == second_payload["id"]
-
-
-def test_build_insurance_payload_uses_stable_unknown_policy_number() -> None:
-    first_payload = build_insurance_payload("Provider: Acme Insurance\nHealth coverage")
-    second_payload = build_insurance_payload(
-        " Provider: Acme Insurance \n Health coverage "
-    )
-
-    assert first_payload["document_hash"] == second_payload["document_hash"]
-    assert first_payload["policy_number"] == second_payload["policy_number"]
-
-
-def test_persist_document_if_supported_upserts_cv_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, object] = {}
-    model_responses = iter(
-        [
-            '{"document_type":"cv"}',
-            '{"first_name":"Giulia","last_name":"Bianchi","email":"giulia@example.it","education":["Laurea in Informatica"],"languages":["Italiano"]}',
-        ]
-    )
+def test_infer_pdf_domain_with_ollama_uses_model_json_only() -> None:
+    captured: dict[str, object] = {}
 
     async def fake_chat_with_ollama(prompt: str) -> str:
-        calls.setdefault("prompts", []).append(prompt)
-        return next(model_responses)
+        captured["prompt"] = prompt
+        return '{"document_type":"cv"}'
 
-    async def fake_upsert_payload(
-        collection_name: str, payload: dict[str, object]
-    ) -> None:
-        calls["upsert_collection"] = collection_name
-        calls["upsert_hash"] = payload["document_hash"]
-        calls["upsert_raw_text"] = payload["raw_text"]
-        calls["upsert_first_name"] = payload["first_name"]
-        calls["upsert_education"] = payload["education"]
-
-    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
-    monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
-
-    domain = asyncio.run(
-        persist_document_if_supported(
-            "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica",
-            "Leggi questo CV",
+    original = document_persistence.chat_with_ollama
+    document_persistence.chat_with_ollama = fake_chat_with_ollama
+    try:
+        domain = asyncio.run(
+            infer_pdf_domain_with_ollama(
+                "Work experience and education",
+                "Summarize this CV",
+            )
         )
-    )
+    finally:
+        document_persistence.chat_with_ollama = original
 
     assert domain == "cv"
-    assert (
-        calls["upsert_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
-    )
-    assert "upsert_hash" in calls
-    assert (
-        calls["upsert_raw_text"]
-        == "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica"
-    )
-    assert calls["upsert_first_name"] == "Giulia"
-    assert calls["upsert_education"] == ["Laurea in Informatica"]
-    assert "first_name" in calls["prompts"][1]
+    assert "Classify the uploaded document" in captured["prompt"]
 
 
-def test_persist_document_if_supported_saves_new_insurance(
+def test_build_payload_with_ollama_uses_schema_format_and_service_metadata(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: dict[str, object] = {}
-    model_responses = iter(
-        [
-            '{"document_type":"insurance"}',
-            '{"policy_number":"ITA-001","insurance_provider":"Assicurazioni Acme","start_date":"2026-01-01","end_date":"2026-12-31"}',
-        ]
-    )
+    captured: dict[str, object] = {}
 
-    async def fake_chat_with_ollama(prompt: str) -> str:
-        calls.setdefault("prompts", []).append(prompt)
-        return next(model_responses)
-
-    async def fake_upsert_payload(
-        collection_name: str, payload: dict[str, object]
-    ) -> None:
-        calls["upsert_collection"] = collection_name
-        calls["upsert_hash"] = payload["document_hash"]
-        calls["upsert_policy_number"] = payload["policy_number"]
-        calls["upsert_start_date"] = payload["start_date"]
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        captured["prompt"] = prompt
+        captured["response_format"] = response_format
+        return json.dumps(
+            {
+                "id": None,
+                "document_hash": None,
+                "first_name": "Giulia",
+                "last_name": "Bianchi",
+                "email": "giulia@example.it",
+                "phone": None,
+                "seniority": None,
+                "competences": None,
+                "previous_works": [],
+                "education": ["Laurea in Informatica"],
+                "certification": [],
+                "languages": ["Italiano"],
+                "raw_text": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        )
 
     monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
-    monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
-    domain = asyncio.run(
-        persist_document_if_supported(
-            "Polizza numero: ITA-001\nCompagnia: Assicurazioni Acme\nDecorrenza: 01/01/2026",
-            "Spiega la copertura assicurativa",
+    payload = asyncio.run(
+        build_payload_with_ollama(
+            "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica",
+            "candidate",
         )
     )
 
-    assert domain == "insurance"
-    assert (
-        calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
+    assert payload["id"].startswith("candidate-")
+    assert payload["document_hash"]
+    assert payload["raw_text"] == (
+        "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica"
     )
-    assert "upsert_hash" in calls
-    assert calls["upsert_policy_number"] == "ITA-001"
-    assert calls["upsert_start_date"] == "2026-01-01"
-    assert "start_date" in calls["prompts"][1]
+    assert payload["first_name"] == "Giulia"
+    assert payload["education"] == ["Laurea in Informatica"]
+    assert captured["response_format"] == CandidateVectorMetadata.model_json_schema()
+    assert "JSON Schema" in captured["prompt"]
+
+
+def test_build_payload_with_ollama_uses_insurance_schema_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        captured["prompt"] = prompt
+        captured["response_format"] = response_format
+        return json.dumps(
+            {
+                "id": None,
+                "document_hash": None,
+                "candidate_id": None,
+                "policy_number": "ITA-001",
+                "insurance_provider": "Assicurazioni Acme",
+                "insurance_type": "salute",
+                "policy_holder": None,
+                "coverage_details": {"coverages": ["Spese mediche"]},
+                "start_date": "2026-01-01",
+                "end_date": None,
+                "premium_amount": None,
+                "currency": "EUR",
+                "beneficiary": None,
+                "raw_text": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        )
+
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+
+    payload = asyncio.run(
+        build_payload_with_ollama(
+            "Polizza numero ITA-001\nCompagnia Assicurazioni Acme",
+            "insurance",
+        )
+    )
+
+    assert payload["policy_number"] == "ITA-001"
+    assert payload["insurance_provider"] == "Assicurazioni Acme"
+    assert payload["id"]
+    assert captured["response_format"] == InsuranceVectorMetadata.model_json_schema()
+    assert "policy_number" in captured["prompt"]
+
+
+def test_parse_json_object_rejects_non_json_wrappers() -> None:
+    with pytest.raises(VectorDbMetadataError):
+        document_persistence._parse_json_object('Here is JSON: {"document_type":"cv"}')
 
 
 def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None:
@@ -323,20 +200,6 @@ def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None
     assert metadata["policy_holder"] == {"first_name": "Amina", "last_name": "Policy"}
     assert metadata["coverage_details"] == {"coverages": ["orthodontics"]}
     assert metadata["premium_amount"] == 25.5
-
-
-def test_build_vector_metadata_allows_missing_optional_insurance_fields() -> None:
-    metadata = build_vector_db_metadata(
-        {"id": "insurance-ai-2", "raw_text": "No optional values extracted"},
-        metadata_kind="insurance",
-    )
-
-    assert metadata["policy_number"] is None
-    assert metadata["insurance_type"] is None
-    assert metadata["insurance_provider"] is None
-    assert metadata["policy_holder"] is None
-    assert metadata["coverage_details"] is None
-    assert metadata["premium_amount"] is None
     assert metadata["currency"] == "EUR"
 
 
@@ -436,37 +299,135 @@ def test_persist_extracted_payload_upserts_payload_metadata_without_semantic_def
     assert captured["payload"]["currency"] == "EUR"
 
 
-def test_build_insurance_payload_maps_requested_insurance_schema_fields() -> None:
-    payload = build_insurance_payload(
-        "SafeLife Insurance\n"
-        "Candidate ID: 123e4567-e89b-12d3-a456-426614174000\n"
-        "Policy Number: LIFE-42\n"
-        "Insurance Type: Life\n"
-        "Policy Holder: John Doe\n"
-        "Coverage Limit: 500000\n"
-        "Medical: true\n"
-        "Dental: false\n"
-        "Accident: yes\n"
-        "Start Date: 2026-02-01\n"
-        "End Date: 2027-02-01\n"
-        "Premium: 49.90\n"
-        "Beneficiary: Jane Doe, Spouse"
+def test_persist_document_if_supported_upserts_cv_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+    model_responses = iter(
+        [
+            '{"document_type":"cv"}',
+            json.dumps(
+                {
+                    "id": None,
+                    "document_hash": None,
+                    "first_name": "Giulia",
+                    "last_name": "Bianchi",
+                    "email": "giulia@example.it",
+                    "phone": None,
+                    "seniority": None,
+                    "competences": None,
+                    "previous_works": [],
+                    "education": ["Laurea in Informatica"],
+                    "certification": [],
+                    "languages": ["Italiano"],
+                    "raw_text": None,
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            ),
+        ]
     )
 
-    assert payload["candidate_id"] == "123e4567-e89b-12d3-a456-426614174000"
-    assert payload["policy_number"] == "LIFE-42"
-    assert payload["insurance_provider"] == "SafeLife Insurance"
-    assert payload["insurance_type"] == "life"
-    assert payload["policy_holder"] == {"first_name": "John", "last_name": "Doe"}
-    assert payload["coverage_details"]["coverage_limit"] == 500000.0
-    assert payload["coverage_details"]["medical"] is True
-    assert payload["coverage_details"]["dental"] is False
-    assert payload["coverage_details"]["accident"] is True
-    assert payload["start_date"] == "2026-02-01"
-    assert payload["end_date"] == "2027-02-01"
-    assert payload["premium_amount"] == 49.9
-    assert payload["currency"] == "EUR"
-    assert payload["beneficiary"] == {"name": "Jane Doe", "relationship": "Spouse"}
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        calls.setdefault("prompts", []).append(prompt)
+        calls.setdefault("formats", []).append(response_format)
+        return next(model_responses)
+
+    async def fake_upsert_payload(
+        collection_name: str, payload: dict[str, object]
+    ) -> None:
+        calls["upsert_collection"] = collection_name
+        calls["upsert_hash"] = payload["document_hash"]
+        calls["upsert_raw_text"] = payload["raw_text"]
+        calls["upsert_first_name"] = payload["first_name"]
+        calls["upsert_education"] = payload["education"]
+
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
+
+    domain = asyncio.run(
+        persist_document_if_supported(
+            "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica",
+            "Leggi questo CV",
+        )
+    )
+
+    assert domain == "cv"
+    assert calls["upsert_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    assert "upsert_hash" in calls
+    assert calls["upsert_raw_text"] == (
+        "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica"
+    )
+    assert calls["upsert_first_name"] == "Giulia"
+    assert calls["upsert_education"] == ["Laurea in Informatica"]
+    assert "first_name" in calls["prompts"][1]
+    assert calls["formats"][1] == CandidateVectorMetadata.model_json_schema()
+
+
+def test_persist_document_if_supported_saves_new_insurance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict[str, object] = {}
+    model_responses = iter(
+        [
+            '{"document_type":"insurance"}',
+            json.dumps(
+                {
+                    "id": None,
+                    "document_hash": None,
+                    "candidate_id": None,
+                    "policy_number": "ITA-001",
+                    "insurance_provider": "Assicurazioni Acme",
+                    "insurance_type": None,
+                    "policy_holder": None,
+                    "coverage_details": None,
+                    "start_date": "2026-01-01",
+                    "end_date": None,
+                    "premium_amount": None,
+                    "currency": "EUR",
+                    "beneficiary": None,
+                    "raw_text": None,
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            ),
+        ]
+    )
+
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        calls.setdefault("prompts", []).append(prompt)
+        calls.setdefault("formats", []).append(response_format)
+        return next(model_responses)
+
+    async def fake_upsert_payload(
+        collection_name: str, payload: dict[str, object]
+    ) -> None:
+        calls["upsert_collection"] = collection_name
+        calls["upsert_hash"] = payload["document_hash"]
+        calls["upsert_policy_number"] = payload["policy_number"]
+        calls["upsert_start_date"] = payload["start_date"]
+
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
+
+    domain = asyncio.run(
+        persist_document_if_supported(
+            "Polizza numero: ITA-001\nCompagnia: Assicurazioni Acme\nDecorrenza: 01/01/2026",
+            "Spiega la copertura assicurativa",
+        )
+    )
+
+    assert domain == "insurance"
+    assert calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
+    assert "upsert_hash" in calls
+    assert calls["upsert_policy_number"] == "ITA-001"
+    assert calls["upsert_start_date"] == "2026-01-01"
+    assert "start_date" in calls["prompts"][1]
+    assert calls["formats"][1] == InsuranceVectorMetadata.model_json_schema()
 
 
 def test_build_vector_records_keeps_multipage_insurance_pdf_in_one_record(
@@ -475,9 +436,12 @@ def test_build_vector_records_keeps_multipage_insurance_pdf_in_one_record(
     monkeypatch.setattr(document_persistence, "VECTOR_DB_CHUNK_SIZE", 5)
 
     records = build_vector_db_records(
-        build_insurance_payload(
-            "Policy Number: MULTI-1\nProvider: Acme Insurance\n"
-            "Premium: EUR 10.00\nCoverage Limit: EUR 1000"
+        {
+            "id": "insurance-ai-5",
+            "policy_number": "MULTI-1",
+            "insurance_provider": "Acme Insurance",
+            "raw_text": "Policy Number: MULTI-1\nProvider: Acme Insurance\fPremium EUR 10.00",
+        },
         ),
         metadata_kind="insurance",
     )
