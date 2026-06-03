@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import uuid
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from clients.ollama import chat_with_ollama
 from config import (
     QDRANT_CANDIDATES_COLLECTION,
     QDRANT_INSURANCES_COLLECTION,
@@ -195,14 +197,41 @@ def build_insurance_payload(document_text: str) -> dict[str, Any]:
 
 
 async def persist_document_if_supported(document_text: str, question: str) -> str:
-    domain = infer_pdf_domain(document_text, question)
+    domain = await infer_pdf_domain_with_ollama(document_text, question)
     if domain == "cv":
-        extracted_payload = build_candidate_payload(document_text)
+        extracted_payload = await build_payload_with_ollama(document_text, "candidate")
         await _upsert_payload(QDRANT_CANDIDATES_COLLECTION, extracted_payload)
     elif domain == "insurance":
-        extracted_payload = build_insurance_payload(document_text)
+        extracted_payload = await build_payload_with_ollama(document_text, "insurance")
         await _upsert_payload(QDRANT_INSURANCES_COLLECTION, extracted_payload)
     return domain
+
+
+async def infer_pdf_domain_with_ollama(document_text: str, question: str) -> str:
+    """Classify document persistence domain with Ollama instead of language-specific labels."""
+    prompt = _build_domain_classification_prompt(document_text, question)
+    raw_result = await chat_with_ollama(prompt)
+    payload = _parse_json_object(raw_result)
+    domain = str(payload.get("document_type", "")).strip().lower()
+    if domain not in {"cv", "insurance", "other"}:
+        raise VectorDbMetadataError(
+            "Ollama document classification must return document_type as "
+            "one of: cv, insurance, other."
+        )
+    return domain
+
+
+async def build_payload_with_ollama(
+    document_text: str, metadata_kind: str
+) -> dict[str, Any]:
+    """Ask Ollama to map multilingual document text to the configured DB fields."""
+    schema = _metadata_schema(metadata_kind)
+    prompt = _build_metadata_extraction_prompt(document_text, metadata_kind, schema)
+    raw_result = await chat_with_ollama(prompt)
+    extracted_payload = _parse_json_object(raw_result)
+    payload = _with_service_metadata(extracted_payload, document_text, metadata_kind)
+    build_vector_db_metadata(payload, metadata_kind=metadata_kind)
+    return payload
 
 
 async def persist_extracted_payload(
@@ -261,6 +290,104 @@ def build_vector_db_metadata(
     metadata = metadata_model.model_dump(mode="json")
     _validate_metadata_values(metadata)
     return metadata
+
+
+def _build_domain_classification_prompt(document_text: str, question: str) -> str:
+    return (
+        "Classify the uploaded document for vector database persistence. "
+        "The document can be written in any language. Use semantic meaning, not "
+        "English labels. Return only one JSON object with this exact shape: "
+        '{"document_type":"cv|insurance|other"}. '
+        "Choose cv for CVs, resumes, curricula vitae, candidate profiles, or "
+        "professional biographies. Choose insurance for policies, insurance "
+        "certificates, coverage documents, claims documents, or related policy "
+        "paperwork. Choose other when neither applies.\n\n"
+        f"User question:\n{question}\n\nDocument text:\n{document_text}"
+    )
+
+
+def _build_metadata_extraction_prompt(
+    document_text: str, metadata_kind: str, schema: type[BaseModel]
+) -> str:
+    field_contract = _metadata_field_contract(schema)
+    return (
+        "Extract structured metadata from the document for vector database "
+        "payload storage. The document can be written in any language. Map values "
+        "by meaning into the DB fields below; do not depend on English field "
+        "labels in the document. Return only a valid JSON object, with no "
+        "Markdown and no commentary. Use null for unknown scalar values, [] for "
+        "unknown list values, and {} only when a known object field has no known "
+        "nested values. Preserve evidence-backed values from the document. "
+        "Normalize dates to YYYY-MM-DD when the date is explicit; otherwise keep "
+        "the original date/range text in the most appropriate field. Normalize "
+        "money amounts as numbers and currencies as ISO 4217 codes when possible. "
+        "Do not invent names, policy numbers, dates, employers, skills, coverage, "
+        "or document types. Service-owned fields id, document_hash, raw_text, "
+        "created_at, and updated_at may be omitted because the service will fill "
+        f"them. Metadata kind: {metadata_kind}.\n\n"
+        f"DB payload fields:\n{field_contract}\n\n"
+        f"Document text:\n{document_text}"
+    )
+
+
+def _metadata_field_contract(schema: type[BaseModel]) -> str:
+    lines: list[str] = []
+    for field_name, field_info in schema.model_fields.items():
+        annotation = _format_annotation(field_info.annotation)
+        lines.append(f"- {field_name}: {annotation}")
+    return "\n".join(lines)
+
+
+def _format_annotation(annotation: Any) -> str:
+    return str(annotation).replace("typing.", "")
+
+
+def _parse_json_object(raw_result: str) -> dict[str, Any]:
+    cleaned = raw_result.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        object_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+        if not object_match:
+            raise VectorDbMetadataError(
+                "Ollama returned metadata that was not valid JSON."
+            ) from exc
+        try:
+            parsed = json.loads(object_match.group(0))
+        except json.JSONDecodeError as nested_exc:
+            raise VectorDbMetadataError(
+                "Ollama returned metadata that was not a valid JSON object."
+            ) from nested_exc
+    if not isinstance(parsed, dict):
+        raise VectorDbMetadataError("Ollama metadata response must be a JSON object.")
+    return parsed
+
+
+def _with_service_metadata(
+    extracted_payload: dict[str, Any], document_text: str, metadata_kind: str
+) -> dict[str, Any]:
+    payload = dict(extracted_payload)
+    document_hash = _document_hash(document_text)
+    timestamp = _utc_timestamp()
+    payload["id"] = _service_document_id(payload.get("id"), document_hash, metadata_kind)
+    payload["document_hash"] = document_hash
+    payload["raw_text"] = document_text
+    payload.setdefault("created_at", timestamp)
+    payload.setdefault("updated_at", timestamp)
+    return payload
+
+
+def _service_document_id(value: Any, document_hash: str, metadata_kind: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if metadata_kind == "candidate":
+        return f"candidate-{document_hash}"
+    if metadata_kind == "insurance":
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"insurance:{document_hash}"))
+    return document_hash
 
 
 async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None:

@@ -216,6 +216,16 @@ def test_persist_document_if_supported_upserts_cv_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
+    model_responses = iter(
+        [
+            '{"document_type":"cv"}',
+            '{"first_name":"Giulia","last_name":"Bianchi","email":"giulia@example.it","education":["Laurea in Informatica"],"languages":["Italiano"]}',
+        ]
+    )
+
+    async def fake_chat_with_ollama(prompt: str) -> str:
+        calls.setdefault("prompts", []).append(prompt)
+        return next(model_responses)
 
     async def fake_upsert_payload(
         collection_name: str, payload: dict[str, object]
@@ -223,13 +233,16 @@ def test_persist_document_if_supported_upserts_cv_payload(
         calls["upsert_collection"] = collection_name
         calls["upsert_hash"] = payload["document_hash"]
         calls["upsert_raw_text"] = payload["raw_text"]
+        calls["upsert_first_name"] = payload["first_name"]
+        calls["upsert_education"] = payload["education"]
 
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
     domain = asyncio.run(
         persist_document_if_supported(
-            "Jane Doe\nEmail: jane@example.com\nWork experience",
-            "Read this CV",
+            "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica",
+            "Leggi questo CV",
         )
     )
 
@@ -239,27 +252,44 @@ def test_persist_document_if_supported_upserts_cv_payload(
     )
     assert "upsert_hash" in calls
     assert (
-        calls["upsert_raw_text"] == "Jane Doe\nEmail: jane@example.com\nWork experience"
+        calls["upsert_raw_text"]
+        == "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica"
     )
+    assert calls["upsert_first_name"] == "Giulia"
+    assert calls["upsert_education"] == ["Laurea in Informatica"]
+    assert "first_name" in calls["prompts"][1]
 
 
 def test_persist_document_if_supported_saves_new_insurance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
+    model_responses = iter(
+        [
+            '{"document_type":"insurance"}',
+            '{"policy_number":"ITA-001","insurance_provider":"Assicurazioni Acme","start_date":"2026-01-01","end_date":"2026-12-31"}',
+        ]
+    )
+
+    async def fake_chat_with_ollama(prompt: str) -> str:
+        calls.setdefault("prompts", []).append(prompt)
+        return next(model_responses)
 
     async def fake_upsert_payload(
         collection_name: str, payload: dict[str, object]
     ) -> None:
         calls["upsert_collection"] = collection_name
         calls["upsert_hash"] = payload["document_hash"]
+        calls["upsert_policy_number"] = payload["policy_number"]
+        calls["upsert_start_date"] = payload["start_date"]
 
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
     domain = asyncio.run(
         persist_document_if_supported(
-            "Policy Number: POL-001\nProvider: Acme Insurance\nStatus: active",
-            "Explain insurance coverage",
+            "Polizza numero: ITA-001\nCompagnia: Assicurazioni Acme\nDecorrenza: 01/01/2026",
+            "Spiega la copertura assicurativa",
         )
     )
 
@@ -268,6 +298,9 @@ def test_persist_document_if_supported_saves_new_insurance(
         calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
     )
     assert "upsert_hash" in calls
+    assert calls["upsert_policy_number"] == "ITA-001"
+    assert calls["upsert_start_date"] == "2026-01-01"
+    assert "start_date" in calls["prompts"][1]
 
 
 def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None:
