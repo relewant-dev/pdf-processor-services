@@ -100,7 +100,7 @@ Document-processing blueprints include a `cv-reader-agent` for reading CVs, resu
 - `candidate-profile-extraction`
 - `experience-skills-normalization`
 
-The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions.
+The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions. Persisted candidate payloads keep `education` as a list of obtained degrees, `certification` as a list of earned certifications, and `languages` as a list of candidate languages.
 
 ## Rotative logs for MCP tools
 
@@ -182,6 +182,8 @@ curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
 ```
 
 Successful responses contain only the Ollama answer as `{"response":"result based on the uploaded PDF"}`.
+
+When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts vector DB records in the configured `candidates` or `insurances` collection. The vector DB save workflow receives an already-extracted payload, validates it against metadata schemas, optionally splits long `raw_text` into chunk records, and persists the resulting metadata without assigning semantic defaults such as candidate names, statuses, insurance types, or skills inside the save layer. Missing optional metadata fields remain `None` or empty lists unless the extracted payload itself contains a value.
 
 ### POST `/api/prompts/execute`
 

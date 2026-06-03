@@ -6,8 +6,11 @@ from services import document_persistence
 from services.document_persistence import (
     build_candidate_payload,
     build_insurance_payload,
+    build_vector_db_metadata,
+    build_vector_db_records,
     infer_pdf_domain,
     persist_document_if_supported,
+    persist_extracted_payload,
 )
 
 
@@ -42,6 +45,110 @@ def test_build_candidate_payload_extracts_contact_fields() -> None:
     assert payload["seniority"] == "senior"
 
 
+def test_build_candidate_payload_maps_cv_sections_to_structured_fields() -> None:
+    payload = build_candidate_payload(
+        "Curriculum Vitae\n"
+        "Jane Doe\n"
+        "Email: jane@example.com\n"
+        "Experience\n"
+        "Software Engineer - Acme Labs 2021 - Present\n"
+        "Built Python services and React dashboards.\n"
+        "Education\n"
+        "Master of Science in Artificial Intelligence - Università della Svizzera italiana, 2020 - 2022\n"
+        "Skills\n"
+        "Python, React, SQL, Docker"
+    )
+
+    assert payload["first_name"] == "Jane"
+    assert payload["last_name"] == "Doe"
+    assert payload["previous_works"] == [
+        {
+            "title": "Software Engineer",
+            "company": "Acme Labs",
+            "date_range": "2021 - Present",
+            "description": "Software Engineer - Acme Labs 2021 - Present Built Python services and React dashboards.",
+        }
+    ]
+    assert payload["education"] == ["Master of Science in Artificial Intelligence"]
+    assert payload["certification"] == []
+    assert payload["languages"] == []
+    assert payload["competences"]["technical"] == ["python", "react", "sql", "docker"]
+
+
+def test_build_candidate_payload_extracts_profile_lists_and_ignores_personal_dates() -> (
+    None
+):
+    payload = build_candidate_payload(
+        "Curriculum Vitae\n"
+        "Mario Rossi\n"
+        "Experience\n"
+        "2024.09–2024.12 Private Tutor in mathematics and physics\n"
+        "2022.09–present\n"
+        "Date of Birth: 18.02.2002 Place of Birth: Varese, Comerio\n"
+        "Education\n"
+        "Bachelor Degree in Mathematics - University of Milan, 2020 - 2023\n"
+        "Master of Science in Data Science - Politecnico di Milano, 2023 - 2025\n"
+        "Certifications\n"
+        "AWS Certified Cloud Practitioner\n"
+        "First Certificate in English\n"
+        "Languages\n"
+        "Italian - Native\n"
+        "English - B2"
+    )
+
+    assert payload["previous_works"] == [
+        {
+            "title": "Private Tutor in mathematics and physics",
+            "date_range": "2024.09 - 2024.12",
+            "description": "2024.09–2024.12 Private Tutor in mathematics and physics",
+        }
+    ]
+    assert payload["education"] == [
+        "Bachelor Degree in Mathematics",
+        "Master of Science in Data Science",
+    ]
+    assert payload["certification"] == [
+        "AWS Certified Cloud Practitioner",
+        "First Certificate in English",
+    ]
+    assert payload["languages"] == ["Italian - Native", "English - B2"]
+
+
+def test_build_candidate_payload_normalizes_hyphenated_roles_and_inline_profile_sections() -> None:
+    payload = build_candidate_payload(
+        "Curriculum Vitae\n"
+        "Mario Rossi\n"
+        "Experience\n"
+        "Software Engineer at Relewant – Chiasso\n"
+        "2026.01 - present\n"
+        "Developing an application that computes the derivative of functions.\n"
+        "Full-stack Engineer at Purest Ltd – Lugano (Switzerland)\n"
+        "2024.09 - 2024.12 Private Tutor in mathematics and physics\n"
+        "Certifications: AWS Certified Cloud Practitioner - Amazon Web Services, 2025\n"
+        "Languages: Italian - Native, English - B2"
+    )
+
+    assert payload["previous_works"] == [
+        {
+            "title": "Software Engineer",
+            "company": "Relewant",
+            "description": "Software Engineer at Relewant – Chiasso",
+        },
+        {
+            "title": "Full-stack Engineer",
+            "company": "Purest Ltd",
+            "description": "Full-stack Engineer at Purest Ltd – Lugano (Switzerland)",
+        },
+        {
+            "title": "Private Tutor in mathematics and physics",
+            "date_range": "2024.09 - 2024.12",
+            "description": "2024.09 - 2024.12 Private Tutor in mathematics and physics",
+        },
+    ]
+    assert payload["certification"] == ["AWS Certified Cloud Practitioner"]
+    assert payload["languages"] == ["Italian - Native", "English - B2"]
+
+
 def test_build_insurance_payload_extracts_policy_fields() -> None:
     payload = build_insurance_payload(
         "Policy Number: POL-001\nProvider: Acme Insurance\nStatus: active\nHealth coverage"
@@ -51,6 +158,35 @@ def test_build_insurance_payload_extracts_policy_fields() -> None:
     assert payload["provider_name"] == "Acme Insurance"
     assert payload["status"] == "active"
     assert payload["insurance_type"] == "health"
+
+
+def test_build_insurance_payload_maps_policy_fields_to_coverage_details() -> None:
+    payload = build_insurance_payload(
+        "Acme Insurance\n"
+        "Policy Number: POL-001\n"
+        "Policyholder: Jane Doe\n"
+        "Effective Date: 01/01/2026\n"
+        "Expiration Date: 31/12/2026\n"
+        "Premium: CHF 1'200.00\n"
+        "Deductible: CHF 500\n"
+        "Coverage Limit: CHF 100'000\n"
+        "Coverage: emergency health care\n"
+        "Exclusion: pre-existing conditions\n"
+        "Endorsement No. END-42"
+    )
+
+    assert payload["provider_name"] == "Acme Insurance"
+    assert payload["coverage_details"] == {
+        "policyholder": "Jane Doe",
+        "effective_date": "01/01/2026",
+        "expiration_date": "31/12/2026",
+        "premium": "CHF 1'200.00",
+        "deductible": "CHF 500",
+        "coverage_limit": "CHF 100'000",
+        "coverages": ["Coverage Limit: CHF 100'000", "Coverage: emergency health care"],
+        "exclusions": ["Exclusion: pre-existing conditions"],
+    }
+    assert payload["documents"] == [{"type": "endorsement", "reference": "END-42"}]
 
 
 def test_build_candidate_payload_uses_stable_document_identity() -> None:
@@ -75,25 +211,18 @@ def test_build_insurance_payload_uses_stable_unknown_policy_number() -> None:
     assert first_payload["insurance_number"] == second_payload["insurance_number"]
 
 
-def test_persist_document_if_supported_skips_existing_cv(
+def test_persist_document_if_supported_upserts_cv_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
-
-    async def fake_document_exists(
-        collection_name: str, payload: dict[str, object]
-    ) -> bool:
-        calls["exists_collection"] = collection_name
-        calls["exists_hash"] = payload["document_hash"]
-        calls["exists_raw_text"] = payload["raw_text"]
-        return True
 
     async def fake_upsert_payload(
         collection_name: str, payload: dict[str, object]
     ) -> None:
         calls["upsert_collection"] = collection_name
+        calls["upsert_hash"] = payload["document_hash"]
+        calls["upsert_raw_text"] = payload["raw_text"]
 
-    monkeypatch.setattr(document_persistence, "_document_exists", fake_document_exists)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
     domain = asyncio.run(
@@ -105,10 +234,12 @@ def test_persist_document_if_supported_skips_existing_cv(
 
     assert domain == "cv"
     assert (
-        calls["exists_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+        calls["upsert_collection"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
     )
-    assert "exists_hash" in calls
-    assert "upsert_collection" not in calls
+    assert "upsert_hash" in calls
+    assert (
+        calls["upsert_raw_text"] == "Jane Doe\nEmail: jane@example.com\nWork experience"
+    )
 
 
 def test_persist_document_if_supported_saves_new_insurance(
@@ -116,21 +247,12 @@ def test_persist_document_if_supported_saves_new_insurance(
 ) -> None:
     calls: dict[str, object] = {}
 
-    async def fake_document_exists(
-        collection_name: str, payload: dict[str, object]
-    ) -> bool:
-        calls["exists_collection"] = collection_name
-        calls["exists_hash"] = payload["document_hash"]
-        calls["exists_raw_text"] = payload["raw_text"]
-        return False
-
     async def fake_upsert_payload(
         collection_name: str, payload: dict[str, object]
     ) -> None:
         calls["upsert_collection"] = collection_name
         calls["upsert_hash"] = payload["document_hash"]
 
-    monkeypatch.setattr(document_persistence, "_document_exists", fake_document_exists)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
 
     domain = asyncio.run(
@@ -142,9 +264,138 @@ def test_persist_document_if_supported_saves_new_insurance(
 
     assert domain == "insurance"
     assert (
-        calls["exists_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
-    )
-    assert (
         calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
     )
-    assert calls["upsert_hash"] == calls["exists_hash"]
+    assert "upsert_hash" in calls
+
+
+def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None:
+    payload = {
+        "id": "insurance-ai-1",
+        "insurance_number": "AI-POL-999",
+        "insurance_type": "dental",
+        "provider_name": "Payload Mutual",
+        "status": "pending_review",
+        "coverage_details": {"coverages": ["orthodontics"]},
+        "documents": [{"type": "policy", "reference": "DOC-7"}],
+        "raw_text": "Extracted policy text",
+    }
+
+    metadata = build_vector_db_metadata(payload, metadata_kind="insurance")
+
+    assert metadata["insurance_number"] == "AI-POL-999"
+    assert metadata["insurance_type"] == "dental"
+    assert metadata["provider_name"] == "Payload Mutual"
+    assert metadata["status"] == "pending_review"
+    assert metadata["coverage_details"] == {"coverages": ["orthodontics"]}
+    assert metadata["documents"] == [{"type": "policy", "reference": "DOC-7"}]
+
+
+def test_build_vector_metadata_allows_missing_optional_insurance_fields() -> None:
+    metadata = build_vector_db_metadata(
+        {"id": "insurance-ai-2", "raw_text": "No optional values extracted"},
+        metadata_kind="insurance",
+    )
+
+    assert metadata["insurance_number"] is None
+    assert metadata["insurance_type"] is None
+    assert metadata["provider_name"] is None
+    assert metadata["status"] is None
+    assert metadata["coverage_details"] is None
+    assert metadata["documents"] == []
+
+
+def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None:
+    payload = {
+        "id": "candidate-ai-1",
+        "first_name": "Amina",
+        "last_name": "Payload",
+        "seniority": "principal",
+        "competences": {"technical": ["rust", "python"]},
+        "education": ["MSc Computer Science"],
+        "certification": ["Kubernetes Administrator"],
+        "languages": ["English", "French"],
+        "raw_text": "Candidate profile",
+    }
+
+    metadata = build_vector_db_metadata(payload, metadata_kind="candidate")
+
+    assert metadata["first_name"] == "Amina"
+    assert metadata["last_name"] == "Payload"
+    assert metadata["seniority"] == "principal"
+    assert metadata["competences"] == {"technical": ["rust", "python"]}
+    assert metadata["education"] == ["MSc Computer Science"]
+    assert metadata["certification"] == ["Kubernetes Administrator"]
+    assert metadata["languages"] == ["English", "French"]
+
+
+def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> None:
+    metadata = build_vector_db_metadata(
+        {"id": "candidate-ai-2", "raw_text": "No optional values extracted"},
+        metadata_kind="candidate",
+    )
+
+    assert metadata["first_name"] is None
+    assert metadata["last_name"] is None
+    assert metadata["email"] is None
+    assert metadata["phone"] is None
+    assert metadata["seniority"] is None
+    assert metadata["competences"] is None
+    assert metadata["previous_works"] == []
+    assert metadata["education"] == []
+    assert metadata["certification"] == []
+    assert metadata["languages"] == []
+
+
+def test_build_vector_records_chunks_embedding_text_without_changing_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(document_persistence, "VECTOR_DB_CHUNK_SIZE", 5)
+    records = build_vector_db_records(
+        {
+            "id": "candidate-ai-3",
+            "first_name": "Chunky",
+            "raw_text": "abcdefghijk",
+        },
+        metadata_kind="candidate",
+    )
+
+    assert len(records) == 3
+    assert [record.payload["first_name"] for record in records] == [
+        "Chunky",
+        "Chunky",
+        "Chunky",
+    ]
+    assert [record.payload["chunk_index"] for record in records] == [0, 1, 2]
+    assert [record.payload["chunk_count"] for record in records] == [3, 3, 3]
+
+
+def test_persist_extracted_payload_upserts_payload_metadata_without_semantic_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_upsert_records(collection_name: str, records: list[object]) -> None:
+        captured["collection_name"] = collection_name
+        captured["payload"] = records[0].payload
+
+    monkeypatch.setattr(document_persistence, "_upsert_records", fake_upsert_records)
+
+    asyncio.run(
+        persist_extracted_payload(
+            "insurances",
+            {
+                "id": "insurance-ai-4",
+                "insurance_type": "vision",
+                "status": "requires_human_review",
+                "raw_text": "Vision policy",
+            },
+            metadata_kind="insurance",
+        )
+    )
+
+    assert captured["collection_name"] == "insurances"
+    assert captured["payload"]["insurance_type"] == "vision"
+    assert captured["payload"]["status"] == "requires_human_review"
+    assert captured["payload"]["insurance_number"] is None
+    assert captured["payload"]["provider_name"] is None
