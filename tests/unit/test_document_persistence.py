@@ -154,10 +154,11 @@ def test_build_insurance_payload_extracts_policy_fields() -> None:
         "Policy Number: POL-001\nProvider: Acme Insurance\nStatus: active\nHealth coverage"
     )
 
-    assert payload["insurance_number"] == "POL-001"
-    assert payload["provider_name"] == "Acme Insurance"
-    assert payload["status"] == "active"
+    assert payload["policy_number"] == "POL-001"
+    assert payload["insurance_provider"] == "Acme Insurance"
     assert payload["insurance_type"] == "health"
+    assert payload["currency"] == "EUR"
+    assert payload["premium_amount"] == 0.0
 
 
 def test_build_insurance_payload_maps_policy_fields_to_coverage_details() -> None:
@@ -175,18 +176,18 @@ def test_build_insurance_payload_maps_policy_fields_to_coverage_details() -> Non
         "Endorsement No. END-42"
     )
 
-    assert payload["provider_name"] == "Acme Insurance"
+    assert payload["insurance_provider"] == "Acme Insurance"
+    assert payload["policy_holder"] == {"first_name": "Jane", "last_name": "Doe"}
+    assert payload["start_date"] == "2026-01-01"
+    assert payload["end_date"] == "2026-12-31"
+    assert payload["premium_amount"] == 1200.0
+    assert payload["currency"] == "CHF"
     assert payload["coverage_details"] == {
-        "policyholder": "Jane Doe",
-        "effective_date": "01/01/2026",
-        "expiration_date": "31/12/2026",
-        "premium": "CHF 1'200.00",
+        "coverage_limit": 100000.0,
         "deductible": "CHF 500",
-        "coverage_limit": "CHF 100'000",
         "coverages": ["Coverage Limit: CHF 100'000", "Coverage: emergency health care"],
         "exclusions": ["Exclusion: pre-existing conditions"],
     }
-    assert payload["documents"] == [{"type": "endorsement", "reference": "END-42"}]
 
 
 def test_build_candidate_payload_uses_stable_document_identity() -> None:
@@ -208,7 +209,7 @@ def test_build_insurance_payload_uses_stable_unknown_policy_number() -> None:
     )
 
     assert first_payload["document_hash"] == second_payload["document_hash"]
-    assert first_payload["insurance_number"] == second_payload["insurance_number"]
+    assert first_payload["policy_number"] == second_payload["policy_number"]
 
 
 def test_persist_document_if_supported_upserts_cv_payload(
@@ -272,23 +273,23 @@ def test_persist_document_if_supported_saves_new_insurance(
 def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None:
     payload = {
         "id": "insurance-ai-1",
-        "insurance_number": "AI-POL-999",
+        "policy_number": "AI-POL-999",
         "insurance_type": "dental",
-        "provider_name": "Payload Mutual",
-        "status": "pending_review",
+        "insurance_provider": "Payload Mutual",
+        "policy_holder": {"first_name": "Amina", "last_name": "Policy"},
         "coverage_details": {"coverages": ["orthodontics"]},
-        "documents": [{"type": "policy", "reference": "DOC-7"}],
+        "premium_amount": 25.5,
         "raw_text": "Extracted policy text",
     }
 
     metadata = build_vector_db_metadata(payload, metadata_kind="insurance")
 
-    assert metadata["insurance_number"] == "AI-POL-999"
+    assert metadata["policy_number"] == "AI-POL-999"
     assert metadata["insurance_type"] == "dental"
-    assert metadata["provider_name"] == "Payload Mutual"
-    assert metadata["status"] == "pending_review"
+    assert metadata["insurance_provider"] == "Payload Mutual"
+    assert metadata["policy_holder"] == {"first_name": "Amina", "last_name": "Policy"}
     assert metadata["coverage_details"] == {"coverages": ["orthodontics"]}
-    assert metadata["documents"] == [{"type": "policy", "reference": "DOC-7"}]
+    assert metadata["premium_amount"] == 25.5
 
 
 def test_build_vector_metadata_allows_missing_optional_insurance_fields() -> None:
@@ -297,12 +298,13 @@ def test_build_vector_metadata_allows_missing_optional_insurance_fields() -> Non
         metadata_kind="insurance",
     )
 
-    assert metadata["insurance_number"] is None
+    assert metadata["policy_number"] is None
     assert metadata["insurance_type"] is None
-    assert metadata["provider_name"] is None
-    assert metadata["status"] is None
+    assert metadata["insurance_provider"] is None
+    assert metadata["policy_holder"] is None
     assert metadata["coverage_details"] is None
-    assert metadata["documents"] == []
+    assert metadata["premium_amount"] is None
+    assert metadata["currency"] == "EUR"
 
 
 def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None:
@@ -387,7 +389,7 @@ def test_persist_extracted_payload_upserts_payload_metadata_without_semantic_def
             {
                 "id": "insurance-ai-4",
                 "insurance_type": "vision",
-                "status": "requires_human_review",
+                "policy_number": "VIS-1",
                 "raw_text": "Vision policy",
             },
             metadata_kind="insurance",
@@ -396,6 +398,57 @@ def test_persist_extracted_payload_upserts_payload_metadata_without_semantic_def
 
     assert captured["collection_name"] == "insurances"
     assert captured["payload"]["insurance_type"] == "vision"
-    assert captured["payload"]["status"] == "requires_human_review"
-    assert captured["payload"]["insurance_number"] is None
-    assert captured["payload"]["provider_name"] is None
+    assert captured["payload"]["policy_number"] == "VIS-1"
+    assert captured["payload"]["insurance_provider"] is None
+    assert captured["payload"]["currency"] == "EUR"
+
+
+def test_build_insurance_payload_maps_requested_insurance_schema_fields() -> None:
+    payload = build_insurance_payload(
+        "SafeLife Insurance\n"
+        "Candidate ID: 123e4567-e89b-12d3-a456-426614174000\n"
+        "Policy Number: LIFE-42\n"
+        "Insurance Type: Life\n"
+        "Policy Holder: John Doe\n"
+        "Coverage Limit: 500000\n"
+        "Medical: true\n"
+        "Dental: false\n"
+        "Accident: yes\n"
+        "Start Date: 2026-02-01\n"
+        "End Date: 2027-02-01\n"
+        "Premium: 49.90\n"
+        "Beneficiary: Jane Doe, Spouse"
+    )
+
+    assert payload["candidate_id"] == "123e4567-e89b-12d3-a456-426614174000"
+    assert payload["policy_number"] == "LIFE-42"
+    assert payload["insurance_provider"] == "SafeLife Insurance"
+    assert payload["insurance_type"] == "life"
+    assert payload["policy_holder"] == {"first_name": "John", "last_name": "Doe"}
+    assert payload["coverage_details"]["coverage_limit"] == 500000.0
+    assert payload["coverage_details"]["medical"] is True
+    assert payload["coverage_details"]["dental"] is False
+    assert payload["coverage_details"]["accident"] is True
+    assert payload["start_date"] == "2026-02-01"
+    assert payload["end_date"] == "2027-02-01"
+    assert payload["premium_amount"] == 49.9
+    assert payload["currency"] == "EUR"
+    assert payload["beneficiary"] == {"name": "Jane Doe", "relationship": "Spouse"}
+
+
+def test_build_vector_records_keeps_multipage_insurance_pdf_in_one_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(document_persistence, "VECTOR_DB_CHUNK_SIZE", 5)
+
+    records = build_vector_db_records(
+        build_insurance_payload(
+            "Policy Number: MULTI-1\nProvider: Acme Insurance\n"
+            "Premium: EUR 10.00\nCoverage Limit: EUR 1000"
+        ),
+        metadata_kind="insurance",
+    )
+
+    assert len(records) == 1
+    assert records[0].payload["policy_number"] == "MULTI-1"
+    assert "chunk_index" not in records[0].payload

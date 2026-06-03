@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -52,12 +53,17 @@ class InsuranceVectorMetadata(BaseModel):
 
     id: str = Field(..., min_length=1)
     document_hash: str | None = None
-    insurance_number: str | None = None
+    candidate_id: str | None = None
+    policy_number: str | None = None
+    insurance_provider: str | None = None
     insurance_type: str | None = None
-    provider_name: str | None = None
-    status: str | None = None
+    policy_holder: dict[str, Any] | None = None
     coverage_details: dict[str, Any] | None = None
-    documents: list[dict[str, Any]] = Field(default_factory=list)
+    start_date: str | None = None
+    end_date: str | None = None
+    premium_amount: float | None = None
+    currency: str = "EUR"
+    beneficiary: dict[str, Any] | None = None
     raw_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
@@ -141,20 +147,50 @@ def build_insurance_payload(document_text: str) -> dict[str, Any]:
         document_text,
         capture_group=1,
     )
-    provider_name = _extract_insurance_provider_name(document_text)
+    premium_amount, premium_currency = _extract_money_components_for_label(
+        document_text, ("premium", "amount due")
+    )
+    coverage_limit, _coverage_currency = _extract_money_components_for_label(
+        document_text, ("coverage limit", "limit", "sum insured")
+    )
+    timestamp = _utc_timestamp()
 
     return {
-        "id": f"insurance-{document_hash}",
+        "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"insurance:{document_hash}")),
         "document_hash": document_hash,
-        "insurance_number": policy_number or f"unknown-{document_hash[:12]}",
+        "candidate_id": _extract_candidate_id(document_text),
+        "policy_number": policy_number or f"unknown-{document_hash[:12]}",
+        "insurance_provider": _extract_insurance_provider_name(document_text),
         "insurance_type": _detect_insurance_type(document_text),
-        "provider_name": provider_name,
-        "status": _detect_insurance_status(document_text),
-        "coverage_details": _extract_insurance_coverage_details(document_text),
-        "documents": _extract_insurance_document_references(document_text),
+        "policy_holder": _extract_person_name_json(
+            _extract_first(
+                r"(?:policyholder|policy holder|insured|member|name)\s*[:\-]\s*([^\n]+)",
+                document_text,
+                capture_group=1,
+            )
+        ),
+        "coverage_details": _extract_insurance_coverage_details(
+            document_text, coverage_limit=coverage_limit
+        ),
+        "start_date": _normalize_date(
+            _extract_labeled_date(
+                document_text, ("effective date", "start date", "valid from")
+            )
+        ),
+        "end_date": _normalize_date(
+            _extract_labeled_date(
+                document_text,
+                ("expiration date", "expiry date", "end date", "valid until"),
+            )
+        ),
+        "premium_amount": premium_amount if premium_amount is not None else 0.0,
+        "currency": (
+            premium_currency or _extract_labeled_currency(document_text) or "EUR"
+        ),
+        "beneficiary": _extract_beneficiary(document_text),
         "raw_text": document_text,
-        "created_at": _utc_timestamp(),
-        "updated_at": _utc_timestamp(),
+        "created_at": timestamp,
+        "updated_at": timestamp,
     }
 
 
@@ -178,7 +214,7 @@ async def persist_extracted_payload(
     """Persist already-extracted LLM payload metadata to the vector DB.
 
     The vector DB workflow validates and persists the metadata it receives. It does
-    not infer or hardcode semantic metadata such as status, skills, candidate names,
+    not infer or hardcode semantic metadata such as skills, candidate names,
     document types, or insurance types.
     """
     records = build_vector_db_records(extracted_payload, metadata_kind=metadata_kind)
@@ -193,7 +229,12 @@ def build_vector_db_records(
     metadata = build_vector_db_metadata(
         extracted_payload, metadata_kind=metadata_kind
     )
-    chunks = _split_embedding_text(_embedding_text_from_payload(metadata))
+    embedding_text = _embedding_text_from_payload(metadata)
+    chunks = (
+        [embedding_text]
+        if metadata_kind == "insurance"
+        else _split_embedding_text(embedding_text)
+    )
     return [
         VectorDbRecord(
             id=_qdrant_point_id(
@@ -223,7 +264,16 @@ def build_vector_db_metadata(
 
 
 async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None:
-    await persist_extracted_payload(collection_name, payload)
+    metadata_kind = _metadata_kind_for_collection(collection_name)
+    await persist_extracted_payload(collection_name, payload, metadata_kind=metadata_kind)
+
+
+def _metadata_kind_for_collection(collection_name: str) -> str | None:
+    if collection_name == QDRANT_CANDIDATES_COLLECTION:
+        return "candidate"
+    if collection_name == QDRANT_INSURANCES_COLLECTION:
+        return "insurance"
+    return None
 
 
 async def _upsert_records(
@@ -435,28 +485,16 @@ def _extract_insurance_provider_name(text: str) -> str:
     return "unknown"
 
 
-def _extract_insurance_coverage_details(text: str) -> dict[str, Any]:
+def _extract_insurance_coverage_details(
+    text: str, *, coverage_limit: float | None = None
+) -> dict[str, Any]:
     details = _without_empty_values(
         {
-            "policyholder": _extract_first(
-                r"(?:policyholder|insured|member|name)\s*[:\-]\s*([^\n]+)",
-                text,
-                capture_group=1,
-            ),
-            "effective_date": _extract_labeled_date(
-                text, ("effective date", "start date", "valid from")
-            ),
-            "expiration_date": _extract_labeled_date(
-                text, ("expiration date", "expiry date", "end date", "valid until")
-            ),
-            "premium": _extract_money_for_label(text, ("premium", "amount due")),
+            "coverage_limit": coverage_limit,
+            "medical": _detect_coverage_flag(text, "medical"),
+            "dental": _detect_coverage_flag(text, "dental"),
+            "accident": _detect_coverage_flag(text, "accident"),
             "deductible": _extract_money_for_label(text, ("deductible", "excess")),
-            "coverage_limit": _extract_money_for_label(
-                text, ("coverage limit", "limit", "sum insured")
-            ),
-            "beneficiary": _extract_first(
-                r"beneficiary\s*[:\-]\s*([^\n]+)", text, capture_group=1
-            ),
         }
     )
     coverages = _extract_coverage_lines(text)
@@ -466,6 +504,75 @@ def _extract_insurance_coverage_details(text: str) -> dict[str, Any]:
     if exclusions:
         details["exclusions"] = exclusions
     return details
+
+
+def _extract_candidate_id(text: str) -> str | None:
+    return _extract_first(
+        r"candidate\s*(?:id|uuid)\s*[:\-]?\s*"
+        r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{12})",
+        text,
+        capture_group=1,
+    )
+
+
+def _extract_person_name_json(full_name: str | None) -> dict[str, str] | None:
+    if not full_name:
+        return None
+    cleaned = _strip_inline_metadata(full_name)
+    first_name, last_name = _split_name(cleaned)
+    if first_name == "unknown" and last_name == "unknown":
+        return None
+    return _without_empty_values({"first_name": first_name, "last_name": last_name})
+
+
+def _extract_beneficiary(text: str) -> dict[str, str] | None:
+    beneficiary_text = _extract_first(
+        r"beneficiary\s*[:\-]\s*([^\n]+)", text, capture_group=1
+    )
+    if not beneficiary_text:
+        return None
+    relationship = _extract_first(
+        r"relationship\s*[:\-]\s*([^,;\n]+)", beneficiary_text, capture_group=1
+    )
+    name = re.sub(
+        r"\brelationship\s*[:\-]\s*[^,;\n]+", "", beneficiary_text, flags=re.IGNORECASE
+    ).strip(" ,;|-\t")
+    if not relationship:
+        relation_match = re.search(
+            r"(.+?)\s*[,;(]\s*(spouse|partner|child|parent|sibling|friend|other)\)?$",
+            name,
+            flags=re.IGNORECASE,
+        )
+        if relation_match:
+            name = relation_match.group(1).strip()
+            relationship = relation_match.group(2).strip().title()
+    return _without_empty_values(
+        {"name": _strip_inline_metadata(name), "relationship": relationship}
+    )
+
+
+def _strip_inline_metadata(value: str) -> str:
+    return re.split(
+        r"\s+(?:relationship|date|dob|birth|policy|coverage|premium)\s*[:\-]",
+        value.strip(),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" ,;|-\t")
+
+
+def _detect_coverage_flag(text: str, label: str) -> bool | None:
+    explicit = _extract_first(
+        rf"\b{re.escape(label)}\b\s*[:\-]?\s*"
+        r"(true|false|yes|no|covered|included|excluded|not covered)",
+        text,
+        capture_group=1,
+    )
+    if explicit:
+        return explicit.lower() in {"true", "yes", "covered", "included"}
+    if re.search(rf"\b{re.escape(label)}\b", text, flags=re.IGNORECASE):
+        return True
+    return None
 
 
 def _extract_insurance_document_references(text: str) -> list[dict[str, str]]:
@@ -756,10 +863,103 @@ def _extract_labeled_date(text: str, labels: tuple[str, ...]) -> str | None:
 def _extract_money_for_label(text: str, labels: tuple[str, ...]) -> str | None:
     label_pattern = "|".join(re.escape(label) for label in labels)
     return _extract_first(
-        rf"(?:{label_pattern})\s*[:\-]?\s*((?:CHF|USD|EUR|GBP|\$|€|£)\s?[0-9][0-9'.,]*)",
+        rf"(?:{label_pattern})\s*[:\-]?\s*"
+        r"((?:(?:CHF|USD|EUR|GBP|\$|€|£)\s*)?[0-9][0-9'.,]*)",
         text,
         capture_group=1,
     )
+
+
+def _extract_money_components_for_label(
+    text: str, labels: tuple[str, ...]
+) -> tuple[float | None, str | None]:
+    money = _extract_money_for_label(text, labels)
+    if not money:
+        return None, None
+    currency = _currency_from_money(money)
+    amount_text = re.sub(
+        r"(?:CHF|USD|EUR|GBP|\$|€|£)", "", money, flags=re.IGNORECASE
+    )
+    normalized_amount = amount_text.replace("'", "").replace(" ", "")
+    if "," in normalized_amount and "." in normalized_amount:
+        normalized_amount = normalized_amount.replace(",", "")
+    elif "," in normalized_amount:
+        normalized_amount = normalized_amount.replace(",", ".")
+    try:
+        return round(float(normalized_amount), 2), currency
+    except ValueError:
+        return None, currency
+
+
+def _currency_from_money(money: str) -> str | None:
+    currency_match = re.search(r"CHF|USD|EUR|GBP|\$|€|£", money, flags=re.IGNORECASE)
+    if not currency_match:
+        return None
+    symbol_or_code = currency_match.group(0).upper()
+    return {"$": "USD", "€": "EUR", "£": "GBP"}.get(symbol_or_code, symbol_or_code)
+
+
+def _extract_labeled_currency(text: str) -> str | None:
+    explicit = _extract_first(
+        r"currency\s*[:\-]\s*([A-Z]{3})", text, capture_group=1
+    )
+    if explicit:
+        return explicit.upper()
+    money_match = re.search(
+        r"(?:CHF|USD|EUR|GBP|\$|€|£)", text, flags=re.IGNORECASE
+    )
+    return _currency_from_money(money_match.group(0)) if money_match else None
+
+
+def _normalize_date(value: str | None) -> str | None:
+    if not value:
+        return None
+    stripped = value.strip()
+    iso_match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", stripped)
+    if iso_match:
+        return stripped
+    numeric_match = re.fullmatch(
+        r"(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})", stripped
+    )
+    if numeric_match:
+        day = int(numeric_match.group(1))
+        month = int(numeric_match.group(2))
+        year = int(numeric_match.group(3))
+        if year < 100:
+            year += 2000
+        if day > 12 or month <= 12:
+            return f"{year:04d}-{month:02d}-{day:02d}"
+    month_match = re.fullmatch(
+        r"([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})", stripped
+    )
+    if month_match:
+        months = {
+            name.lower(): index
+            for index, name in enumerate(
+                (
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                ),
+                start=1,
+            )
+        }
+        month_text = month_match.group(1).lower()
+        month = months.get(month_text) or months.get(f"{month_text[:3]}uary")
+        short_months = {name[:3].lower(): index for name, index in months.items()}
+        month = month or short_months.get(month_text[:3])
+        if month:
+            return f"{int(month_match.group(3)):04d}-{month:02d}-{int(month_match.group(2)):02d}"
+    return stripped
 
 
 def _extract_coverage_lines(text: str) -> list[str]:

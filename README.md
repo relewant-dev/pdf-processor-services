@@ -183,7 +183,7 @@ curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
 
 Successful responses contain only the Ollama answer as `{"response":"result based on the uploaded PDF"}`.
 
-When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts vector DB records in the configured `candidates` or `insurances` collection. The vector DB save workflow receives an already-extracted payload, validates it against metadata schemas, optionally splits long `raw_text` into chunk records, and persists the resulting metadata without assigning semantic defaults such as candidate names, statuses, insurance types, or skills inside the save layer. Missing optional metadata fields remain `None` or empty lists unless the extracted payload itself contains a value.
+When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts vector DB records in the configured `candidates` or `insurances` collection. Insurance PDFs are mapped to a single `insurances` record using the fields `id`, `candidate_id`, `policy_number`, `insurance_provider`, `insurance_type`, `policy_holder`, `coverage_details`, `start_date`, `end_date`, `premium_amount`, `currency`, `beneficiary`, `created_at`, and `updated_at`. Multi-page insurance PDFs are persisted as one insurance record rather than one record per page or text chunk. Candidate payloads can still split long `raw_text` into chunk records for vector search. Missing optional metadata fields remain `None` or empty lists unless the extracted payload itself contains a value.
 
 ### POST `/api/prompts/execute`
 
