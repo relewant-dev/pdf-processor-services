@@ -75,14 +75,14 @@ else:
             "info": {
                 "title": SERVICE_NAME,
                 "version": "0.1.0",
-                "description": "HTTP API for frontend prompt routing with Ollama-only answers.",
+                "description": "HTTP API for frontend prompt routing and database-first PDF answers.",
             },
             "paths": {
                 "/api/documents/pdf": {
                     "post": {
                         "tags": ["documents"],
-                        "summary": "Upload a PDF with multipart form data and answer a question using extracted text.",
-                        "description": "The API extracts PDF text server-side, then sends that extracted text to Ollama. Ollama does not receive or parse raw PDF bytes.",
+                        "summary": "Upload a PDF and answer through the database-first CV/insurance workflow.",
+                        "description": "The API extracts PDF text server-side, detects CV versus insurance, checks the candidates or insurances database collection, extracts only when no record exists, retrieves the saved record, and answers from that database record. The database is the single source of truth for answers.",
                         "requestBody": {
                             "required": True,
                             "content": {
@@ -99,13 +99,13 @@ else:
                                             "question": {
                                                 "type": "string",
                                                 "minLength": 1,
-                                                "description": "Question to answer using the uploaded PDF content.",
+                                                "description": "Question to answer using the database record for the uploaded PDF.",
                                             },
                                             "max_chars": {
                                                 "type": "integer",
                                                 "default": 30000,
                                                 "minimum": 1,
-                                                "description": "Maximum extracted PDF characters to include in the model prompt.",
+                                                "description": "Maximum extracted PDF characters available for classification and new-record extraction.",
                                             },
                                         },
                                     }
