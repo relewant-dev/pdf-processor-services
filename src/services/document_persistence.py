@@ -4,9 +4,10 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
+from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from clients.ollama import chat_with_ollama
@@ -19,6 +20,8 @@ from config import (
 
 
 VECTOR_DB_CHUNK_SIZE = 4000
+DocumentDomain = Literal["cv", "insurance", "other"]
+MetadataKind = Literal["candidate", "insurance"]
 
 
 class VectorDbMetadataError(ValueError):
@@ -26,34 +29,40 @@ class VectorDbMetadataError(ValueError):
 
 
 class CandidateVectorMetadata(BaseModel):
-    """Validated candidate metadata produced by the extraction layer."""
+    """Candidate table payload used as the source of truth for CV answers."""
 
     model_config = ConfigDict(extra="allow")
 
     id: str = Field(..., min_length=1)
-    document_hash: str | None = None
     first_name: str | None = None
     last_name: str | None = None
     email: str | None = None
     phone: str | None = None
     seniority: str | None = None
-    competences: dict[str, Any] | None = None
+    city: str | None = None
+    country: str | None = None
+    address: str | None = None
+    competences: dict[str, Any] | list[Any] | None = None
     previous_works: list[dict[str, Any]] = Field(default_factory=list)
-    education: list[str] = Field(default_factory=list)
-    certification: list[str] = Field(default_factory=list)
-    languages: list[str] = Field(default_factory=list)
+    education: list[dict[str, Any]] | list[str] = Field(default_factory=list)
+    current_job_title: str | None = None
+    current_company: str | None = None
+    availability_date: str | None = None
+    notes: str | None = None
+    language: str | list[str] | None = None
+    certifications: list[str] | list[dict[str, Any]] = Field(default_factory=list)
+    document_hash: str | None = None
     raw_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
 
 class InsuranceVectorMetadata(BaseModel):
-    """Validated insurance metadata produced by the extraction layer."""
+    """Insurance table payload used as the source of truth for insurance answers."""
 
     model_config = ConfigDict(extra="allow")
 
     id: str = Field(..., min_length=1)
-    document_hash: str | None = None
     candidate_id: str | None = None
     policy_number: str | None = None
     insurance_provider: str | None = None
@@ -63,11 +72,21 @@ class InsuranceVectorMetadata(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     premium_amount: float | None = None
-    currency: str = "EUR"
+    currency: str | None = None
     beneficiary: dict[str, Any] | None = None
+    document_hash: str | None = None
     raw_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class GenericVectorMetadata(BaseModel):
+    """Validated generic metadata produced by the extraction layer."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(..., min_length=1)
+    raw_text: str | None = None
 
 
 class VectorDbRecord(BaseModel):
@@ -86,19 +105,64 @@ class VectorDbRecord(BaseModel):
         return value
 
 
-async def persist_document_if_supported(document_text: str, question: str) -> str:
+class DocumentWorkflowResult(BaseModel):
+    """Result of the database-first PDF processing workflow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response: str
+    document_type: DocumentDomain
+    collection_name: str | None = None
+    record_id: str | None = None
+    record_existed: bool = False
+
+
+async def answer_document_prompt_from_database(
+    document_text: str, question: str
+) -> DocumentWorkflowResult:
+    """Run the single CV/insurance pipeline with the database as source of truth.
+
+    The PDF text is used only to classify the document, compute the stable document
+    hash, and extract structured data when the corresponding database record does
+    not already exist. User-facing answers are generated exclusively from the
+    retrieved database payload, never directly from the PDF text.
+    """
     domain = await infer_pdf_domain_with_ollama(document_text, question)
-    if domain == "cv":
-        extracted_payload = await build_payload_with_ollama(document_text, "candidate")
-        await _upsert_payload(QDRANT_CANDIDATES_COLLECTION, extracted_payload)
-    elif domain == "insurance":
-        extracted_payload = await build_payload_with_ollama(document_text, "insurance")
-        await _upsert_payload(QDRANT_INSURANCES_COLLECTION, extracted_payload)
-    return domain
+    if domain == "other":
+        raise ToolError("Uploaded PDF must be either a CV or an insurance document.")
+
+    metadata_kind = _metadata_kind_for_domain(domain)
+    collection_name = _collection_for_metadata_kind(metadata_kind)
+    document_hash = _document_hash(document_text)
+
+    record = await get_document_by_hash(collection_name, document_hash)
+    record_existed = record is not None
+    if record is None:
+        extracted_payload = await extract_payload_with_ollama(document_text, metadata_kind)
+        await _upsert_payload(collection_name, extracted_payload)
+        record = await get_document_by_hash(collection_name, document_hash)
+        if record is None:
+            raise ToolError(
+                "Document was saved but could not be retrieved from the database. "
+                "Check Qdrant availability and collection indexing."
+            )
+
+    response = await build_answer_from_database_record(
+        question=question,
+        document_type=domain,
+        record=record,
+    )
+    return DocumentWorkflowResult(
+        response=response,
+        document_type=domain,
+        collection_name=collection_name,
+        record_id=str(record.get("id")) if record.get("id") is not None else None,
+        record_existed=record_existed,
+    )
 
 
-async def infer_pdf_domain_with_ollama(document_text: str, question: str) -> str:
-    """Classify document persistence domain with Ollama instead of language-specific labels."""
+async def infer_pdf_domain_with_ollama(document_text: str, question: str) -> DocumentDomain:
+    """Classify the uploaded PDF as cv, insurance, or other."""
     prompt = _build_domain_classification_prompt(document_text, question)
     raw_result = await chat_with_ollama(prompt)
     payload = _parse_json_object(raw_result)
@@ -108,13 +172,13 @@ async def infer_pdf_domain_with_ollama(document_text: str, question: str) -> str
             "Ollama document classification must return document_type as "
             "one of: cv, insurance, other."
         )
-    return domain
+    return domain  # type: ignore[return-value]
 
 
-async def build_payload_with_ollama(
-    document_text: str, metadata_kind: str
+async def extract_payload_with_ollama(
+    document_text: str, metadata_kind: MetadataKind
 ) -> dict[str, Any]:
-    """Ask Ollama to map multilingual document text to the configured DB fields."""
+    """Extract structured database payload with Ollama for a new document only."""
     schema = _metadata_schema(metadata_kind)
     prompt = _build_metadata_extraction_prompt(document_text, metadata_kind, schema)
     raw_result = await chat_with_ollama(
@@ -126,18 +190,59 @@ async def build_payload_with_ollama(
     return payload
 
 
+async def build_answer_from_database_record(
+    *, question: str, document_type: DocumentDomain, record: dict[str, Any]
+) -> str:
+    """Answer the prompt from structured database data only."""
+    answer_payload = _database_answer_payload(record)
+    prompt = _build_database_answer_prompt(question, document_type, answer_payload)
+    return await chat_with_ollama(prompt)
+
+
+async def get_document_by_hash(
+    collection_name: str, document_hash: str
+) -> dict[str, Any] | None:
+    """Retrieve the first payload matching a document hash from the collection."""
+    body = {
+        "filter": {
+            "must": [
+                {"key": "document_hash", "match": {"value": document_hash}},
+            ]
+        },
+        "limit": 1,
+        "with_payload": True,
+        "with_vector": False,
+    }
+    timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
+    async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
+        response = await client.post(
+            f"/collections/{collection_name}/points/scroll", json=body
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ToolError(
+                f"Failed to query Qdrant collection '{collection_name}' for existing document."
+            ) from exc
+        data = response.json()
+
+    result = data.get("result", {})
+    points = result.get("points", result if isinstance(result, list) else [])
+    if not points:
+        return None
+    payload = points[0].get("payload", {})
+    if not isinstance(payload, dict):
+        raise ToolError("Qdrant returned a document payload with an unexpected shape.")
+    return payload
+
+
 async def persist_extracted_payload(
     collection_name: str,
     extracted_payload: dict[str, Any],
     *,
     metadata_kind: str | None = None,
 ) -> None:
-    """Persist already-extracted LLM payload metadata to the vector DB.
-
-    The vector DB workflow validates and persists the metadata it receives. It does
-    not infer or hardcode semantic metadata such as skills, candidate names,
-    document types, or insurance types.
-    """
+    """Persist already-extracted metadata to the vector DB."""
     records = build_vector_db_records(extracted_payload, metadata_kind=metadata_kind)
     await _upsert_records(collection_name, records)
 
@@ -186,14 +291,15 @@ def build_vector_db_metadata(
 
 def _build_domain_classification_prompt(document_text: str, question: str) -> str:
     return (
-        "Classify the uploaded document for vector database persistence. "
+        "Classify the uploaded document for database routing. "
         "The document can be written in any language. Use semantic meaning, not "
         "English labels. Return only one JSON object with this exact shape: "
         '{"document_type":"cv|insurance|other"}. '
         "Choose cv for CVs, resumes, curricula vitae, candidate profiles, or "
         "professional biographies. Choose insurance for policies, insurance "
         "certificates, coverage documents, claims documents, or related policy "
-        "paperwork. Choose other when neither applies.\n\n"
+        "paperwork. Choose other when neither applies. Do not answer the user "
+        "question and do not extract structured fields in this step.\n\n"
         f"User question:\n{question}\n\nDocument text:\n{document_text}"
     )
 
@@ -231,6 +337,21 @@ def _build_metadata_extraction_prompt(
     )
 
 
+def _build_database_answer_prompt(
+    question: str, document_type: DocumentDomain, record: dict[str, Any]
+) -> str:
+    database_json = json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False)
+    return (
+        "Answer the user's question using only the structured database record below. "
+        "The database is the single source of truth. Do not use or refer to the "
+        "uploaded PDF text, and do not invent missing values. If the database record "
+        "does not contain enough information, say which information is unavailable.\n\n"
+        f"Document type: {document_type}\n"
+        f"User question:\n{question}\n\n"
+        f"Database record:\n{database_json}"
+    )
+
+
 def _parse_json_object(raw_result: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw_result.strip())
@@ -252,9 +373,14 @@ def _with_service_metadata(
     payload["id"] = _service_document_id(payload.get("id"), document_hash, metadata_kind)
     payload["document_hash"] = document_hash
     payload["raw_text"] = document_text
-    payload.setdefault("created_at", timestamp)
-    payload.setdefault("updated_at", timestamp)
+    payload["created_at"] = payload.get("created_at") or timestamp
+    payload["updated_at"] = timestamp
     return payload
+
+
+def _database_answer_payload(record: dict[str, Any]) -> dict[str, Any]:
+    excluded_keys = {"raw_text", "document_hash", "chunk_index", "chunk_count"}
+    return {key: value for key, value in record.items() if key not in excluded_keys}
 
 
 def _service_document_id(value: Any, document_hash: str, metadata_kind: str) -> str:
@@ -272,6 +398,20 @@ async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None
     await persist_extracted_payload(collection_name, payload, metadata_kind=metadata_kind)
 
 
+def _metadata_kind_for_domain(domain: DocumentDomain) -> MetadataKind:
+    if domain == "cv":
+        return "candidate"
+    if domain == "insurance":
+        return "insurance"
+    raise ToolError("Uploaded PDF must be either a CV or an insurance document.")
+
+
+def _collection_for_metadata_kind(metadata_kind: MetadataKind) -> str:
+    if metadata_kind == "candidate":
+        return QDRANT_CANDIDATES_COLLECTION
+    return QDRANT_INSURANCES_COLLECTION
+
+
 def _metadata_kind_for_collection(collection_name: str) -> str | None:
     if collection_name == QDRANT_CANDIDATES_COLLECTION:
         return "candidate"
@@ -286,7 +426,15 @@ async def _upsert_records(
     body = {"points": [record.model_dump(mode="json") for record in records]}
     timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
-        await client.put(f"/collections/{collection_name}/points", json=body)
+        response = await client.put(
+            f"/collections/{collection_name}/points",
+            params={"wait": True},
+            json=body,
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ToolError(f"Failed to upsert Qdrant collection '{collection_name}'.") from exc
 
 
 def _qdrant_point_id(value: str) -> int:
@@ -311,15 +459,6 @@ def _metadata_schema(metadata_kind: str | None) -> type[BaseModel]:
     if metadata_kind == "insurance":
         return InsuranceVectorMetadata
     return GenericVectorMetadata
-
-
-class GenericVectorMetadata(BaseModel):
-    """Validated generic metadata produced by the extraction layer."""
-
-    model_config = ConfigDict(extra="allow")
-
-    id: str = Field(..., min_length=1)
-    raw_text: str | None = None
 
 
 def _embedding_text_from_payload(metadata: dict[str, Any]) -> str:

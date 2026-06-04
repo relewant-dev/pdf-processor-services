@@ -7,13 +7,8 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import UploadFile
 
-from clients.ollama import chat_with_ollama
-from tools.document import (
-    build_document_prompt,
-    extract_pdf_text,
-    truncate_document_text,
-)
-from services.document_persistence import persist_document_if_supported
+from tools.document import extract_pdf_text, truncate_document_text
+from services.document_persistence import answer_document_prompt_from_database
 
 
 class PdfUploadRequest(BaseModel):
@@ -39,10 +34,11 @@ async def process_pdf_upload(
     upload: UploadFile,
     request: PdfUploadRequest,
 ) -> PdfUploadResponse:
-    """Extract PDF text server-side, then ask Ollama about that text.
+    """Extract PDF text, then answer through the database-first workflow.
 
-    Ollama does not receive or parse the raw PDF binary. Image-only or scanned PDFs
-    without an extractable text layer require OCR before this endpoint can answer.
+    The uploaded PDF is classified and checked against the appropriate database
+    collection before any structured extraction runs. Answers are generated from
+    the retrieved database record rather than directly from the PDF text.
     """
     _validate_pdf_upload(upload)
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -51,10 +47,11 @@ async def process_pdf_upload(
         document_text = extract_pdf_text(str(temp_path))
 
     truncated_text = truncate_document_text(document_text, max_chars=request.max_chars)
-    prompt = build_document_prompt(truncated_text, request.question)
-    model_result = await chat_with_ollama(prompt)
-    await persist_document_if_supported(document_text=truncated_text, question=request.question)
-    return PdfUploadResponse(response=model_result)
+    workflow_result = await answer_document_prompt_from_database(
+        document_text=truncated_text,
+        question=request.question,
+    )
+    return PdfUploadResponse(response=workflow_result.response)
 
 
 def _validate_pdf_upload(upload: UploadFile) -> None:
