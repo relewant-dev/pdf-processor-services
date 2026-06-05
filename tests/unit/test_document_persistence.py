@@ -112,8 +112,11 @@ def test_build_metadata_extraction_prompt_contains_strict_schema_instructions() 
 def test_infer_pdf_domain_with_ollama_uses_model_json_only(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_chat_with_ollama(prompt: str) -> str:
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
         captured["prompt"] = prompt
+        captured["response_format"] = response_format
         return '{"document_type":"cv"}'
 
     monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
@@ -126,6 +129,10 @@ def test_infer_pdf_domain_with_ollama_uses_model_json_only(monkeypatch: pytest.M
     )
 
     assert domain == "cv"
+    assert (
+        captured["response_format"]
+        == document_persistence._domain_classification_schema()
+    )
     assert "Classify the uploaded document" in captured["prompt"]
     assert "Do not answer the user question" in captured["prompt"]
 
@@ -230,9 +237,15 @@ def test_extract_payload_with_ollama_uses_insurance_schema_format(
     assert "policy_number" in captured["prompt"]
 
 
-def test_parse_json_object_rejects_non_json_wrappers() -> None:
-    with pytest.raises(VectorDbMetadataError):
-        document_persistence._parse_json_object('Here is JSON: {"document_type":"cv"}')
+def test_parse_json_object_accepts_embedded_json_wrappers() -> None:
+    assert document_persistence._parse_json_object(
+        'Here is JSON: {"document_type":"cv"}'
+    ) == {"document_type": "cv"}
+
+
+def test_parse_json_object_rejects_empty_response() -> None:
+    with pytest.raises(VectorDbMetadataError, match="empty metadata response"):
+        document_persistence._parse_json_object("  ")
 
 
 def test_build_vector_metadata_uses_extracted_insurance_payload_values() -> None:
@@ -382,7 +395,7 @@ def test_database_first_workflow_uses_existing_candidate_without_extraction(
     }
 
     async def fake_infer(document_text: str, question: str) -> str:
-        return "cv"
+        raise AssertionError("existing records should not be classified again")
 
     async def fake_get_document_by_hash(collection_name: str, document_hash: str):
         calls["collection"] = collection_name
@@ -400,7 +413,9 @@ def test_database_first_workflow_uses_existing_candidate_without_extraction(
         return "Ada is stored in the database."
 
     monkeypatch.setattr(document_persistence, "infer_pdf_domain_with_ollama", fake_infer)
-    monkeypatch.setattr(document_persistence, "get_document_by_hash", fake_get_document_by_hash)
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
     monkeypatch.setattr(document_persistence, "extract_payload_with_ollama", fake_extract)
     monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
 
@@ -432,7 +447,9 @@ def test_database_first_workflow_extracts_saves_retrieves_then_answers_new_insur
 
     async def fake_get_document_by_hash(collection_name: str, document_hash: str):
         calls["get_count"] = int(calls["get_count"]) + 1
-        return None if calls["get_count"] == 1 else saved_record
+        if calls["get_count"] < 3:
+            return None
+        return saved_record
 
     async def fake_extract(document_text: str, metadata_kind: str) -> dict[str, object]:
         calls["extract_kind"] = metadata_kind
@@ -450,7 +467,9 @@ def test_database_first_workflow_extracts_saves_retrieves_then_answers_new_insur
         return "Policy POL-1 is stored."
 
     monkeypatch.setattr(document_persistence, "infer_pdf_domain_with_ollama", fake_infer)
-    monkeypatch.setattr(document_persistence, "get_document_by_hash", fake_get_document_by_hash)
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
     monkeypatch.setattr(document_persistence, "extract_payload_with_ollama", fake_extract)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
     monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
@@ -459,7 +478,7 @@ def test_database_first_workflow_extracts_saves_retrieves_then_answers_new_insur
 
     assert result.response == "Policy POL-1 is stored."
     assert result.record_existed is False
-    assert calls["get_count"] == 2
+    assert calls["get_count"] == 3
     assert calls["upsert_count"] == 1
     assert calls["extract_kind"] == "insurance"
     assert calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
@@ -472,10 +491,34 @@ def test_database_first_workflow_rejects_other_documents(monkeypatch: pytest.Mon
     async def fake_infer(document_text: str, question: str) -> str:
         return "other"
 
+    async def fake_get_document_by_hash(collection_name: str, document_hash: str):
+        return None
+
     monkeypatch.setattr(document_persistence, "infer_pdf_domain_with_ollama", fake_infer)
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
 
     with pytest.raises(ToolError, match="CV or an insurance"):
         asyncio.run(answer_document_prompt_from_database("Invoice text", "Summarize"))
+
+
+def test_database_first_workflow_converts_metadata_errors_to_tool_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_infer(document_text: str, question: str) -> str:
+        raise VectorDbMetadataError("Ollama returned an empty metadata response.")
+
+    async def fake_get_document_by_hash(collection_name: str, document_hash: str):
+        return None
+
+    monkeypatch.setattr(document_persistence, "infer_pdf_domain_with_ollama", fake_infer)
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
+
+    with pytest.raises(ToolError, match="Unable to process PDF metadata"):
+        asyncio.run(answer_document_prompt_from_database("CV text", "Summarize"))
 
 
 def test_build_vector_records_keeps_multipage_insurance_pdf_in_one_record(
