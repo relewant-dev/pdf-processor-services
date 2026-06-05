@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Literal
 
 import httpx
@@ -11,6 +12,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from clients.ollama import chat_with_ollama
+from services.performance import log_performance_event
 from config import (
     QDRANT_CANDIDATES_COLLECTION,
     QDRANT_INSURANCES_COLLECTION,
@@ -140,50 +142,91 @@ async def answer_document_prompt_from_database(
 async def _answer_document_prompt_from_database(
     document_text: str, question: str
 ) -> DocumentWorkflowResult:
+    total_started_at = perf_counter()
     document_hash = _document_hash(document_text)
+
+    lookup_started_at = perf_counter()
     existing_record = await _get_existing_document_record(document_hash)
+    initial_lookup_duration_ms = _elapsed_ms(lookup_started_at)
     if existing_record is not None:
         domain, collection_name, record = existing_record
+        answer_started_at = perf_counter()
         response = await build_answer_from_database_record(
             question=question,
             document_type=domain,
             record=record,
         )
-        return DocumentWorkflowResult(
+        answer_duration_ms = _elapsed_ms(answer_started_at)
+        result = DocumentWorkflowResult(
             response=response,
             document_type=domain,
             collection_name=collection_name,
             record_id=str(record.get("id")) if record.get("id") is not None else None,
             record_existed=True,
         )
+        _log_database_workflow_performance(
+            result,
+            document_chars=len(document_text),
+            prompt_chars=len(question),
+            initial_lookup_duration_ms=initial_lookup_duration_ms,
+            answer_duration_ms=answer_duration_ms,
+            total_duration_ms=_elapsed_ms(total_started_at),
+        )
+        return result
 
+    classification_started_at = perf_counter()
     domain = await infer_pdf_domain_with_ollama(document_text, question)
+    classification_duration_ms = _elapsed_ms(classification_started_at)
     if domain == "other":
         raise ToolError("Uploaded PDF must be either a CV or an insurance document.")
 
     metadata_kind = _metadata_kind_for_domain(domain)
     collection_name = _collection_for_metadata_kind(metadata_kind)
+
+    extraction_started_at = perf_counter()
     extracted_payload = await extract_payload_with_ollama(document_text, metadata_kind)
+    metadata_extraction_duration_ms = _elapsed_ms(extraction_started_at)
+
+    upsert_started_at = perf_counter()
     await _upsert_payload(collection_name, extracted_payload)
+    upsert_duration_ms = _elapsed_ms(upsert_started_at)
+
+    retrieve_started_at = perf_counter()
     record = await get_document_by_hash(collection_name, document_hash)
+    saved_record_lookup_duration_ms = _elapsed_ms(retrieve_started_at)
     if record is None:
         raise ToolError(
             "Document was saved but could not be retrieved from the database. "
             "Check Qdrant availability and collection indexing."
         )
 
+    answer_started_at = perf_counter()
     response = await build_answer_from_database_record(
         question=question,
         document_type=domain,
         record=record,
     )
-    return DocumentWorkflowResult(
+    answer_duration_ms = _elapsed_ms(answer_started_at)
+    result = DocumentWorkflowResult(
         response=response,
         document_type=domain,
         collection_name=collection_name,
         record_id=str(record.get("id")) if record.get("id") is not None else None,
         record_existed=False,
     )
+    _log_database_workflow_performance(
+        result,
+        document_chars=len(document_text),
+        prompt_chars=len(question),
+        initial_lookup_duration_ms=initial_lookup_duration_ms,
+        classification_duration_ms=classification_duration_ms,
+        metadata_extraction_duration_ms=metadata_extraction_duration_ms,
+        upsert_duration_ms=upsert_duration_ms,
+        saved_record_lookup_duration_ms=saved_record_lookup_duration_ms,
+        answer_duration_ms=answer_duration_ms,
+        total_duration_ms=_elapsed_ms(total_started_at),
+    )
+    return result
 
 
 async def _get_existing_document_record(
@@ -597,4 +640,22 @@ def _validate_metadata_value(key: str, value: Any) -> None:
     raise VectorDbMetadataError(
         f"metadata field '{key}' has unsupported value type "
         f"{type(value).__name__}"
+    )
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return round((perf_counter() - started_at) * 1000, 3)
+
+
+def _log_database_workflow_performance(
+    result: DocumentWorkflowResult,
+    **metrics: Any,
+) -> None:
+    log_performance_event(
+        "document_database_workflow_completed",
+        document_type=result.document_type,
+        collection_name=result.collection_name,
+        record_id=result.record_id,
+        record_existed=result.record_existed,
+        **metrics,
     )
