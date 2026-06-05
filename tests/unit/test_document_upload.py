@@ -1,5 +1,6 @@
 import asyncio
 from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 from fastmcp.exceptions import ToolError
@@ -21,7 +22,7 @@ def make_upload(
     )
 
 
-def test_process_pdf_upload_extracts_uploaded_pdf_and_calls_ollama(
+def test_process_pdf_upload_extracts_uploaded_pdf_and_uses_database_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, str] = {}
@@ -30,21 +31,18 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_calls_ollama(
         captured["file_path"] = file_path
         return "Uploaded PDF text"
 
-    async def fake_chat_with_ollama(prompt: str) -> str:
-        captured["prompt"] = prompt
-        return "PDF answer"
-
-    async def fake_persist_document_if_supported(document_text: str, question: str) -> str:
-        captured["persist_document_text"] = document_text
-        captured["persist_question"] = question
-        return "cv"
+    async def fake_answer_document_prompt_from_database(
+        document_text: str, question: str
+    ) -> object:
+        captured["workflow_document_text"] = document_text
+        captured["workflow_question"] = question
+        return SimpleNamespace(response="PDF answer")
 
     monkeypatch.setattr(document_upload, "extract_pdf_text", fake_extract_pdf_text)
-    monkeypatch.setattr(document_upload, "chat_with_ollama", fake_chat_with_ollama)
     monkeypatch.setattr(
         document_upload,
-        "persist_document_if_supported",
-        fake_persist_document_if_supported,
+        "answer_document_prompt_from_database",
+        fake_answer_document_prompt_from_database,
     )
 
     response = asyncio.run(
@@ -56,10 +54,8 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_calls_ollama(
 
     assert response.response == "PDF answer"
     assert captured["file_path"].endswith(".pdf")
-    assert "Uploaded PDF text" in captured["prompt"]
-    assert "What is this document?" in captured["prompt"]
-    assert captured["persist_document_text"] == "Uploaded PDF text"
-    assert captured["persist_question"] == "What is this document?"
+    assert captured["workflow_document_text"] == "Uploaded PDF text"
+    assert captured["workflow_question"] == "What is this document?"
 
 
 def test_process_pdf_upload_rejects_non_pdf_filename() -> None:
@@ -120,10 +116,10 @@ def test_pdf_upload_endpoint_accepts_multipart_form_data(
     }
 
 
-def test_pdf_upload_openapi_documents_text_extraction_before_ollama() -> None:
+def test_pdf_upload_openapi_documents_database_first_workflow() -> None:
     from http_api import build_openapi_schema
 
     operation = build_openapi_schema()["paths"]["/api/documents/pdf"]["post"]
 
-    assert "extracted text" in operation["summary"]
-    assert "Ollama does not receive or parse raw PDF bytes" in operation["description"]
+    assert "database-first" in operation["summary"]
+    assert "database is the single source of truth" in operation["description"]

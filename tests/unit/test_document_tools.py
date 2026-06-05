@@ -3,14 +3,7 @@ from pathlib import Path
 import pytest
 from fastmcp.exceptions import ToolError
 
-from tools.document import build_document_prompt, extract_pdf_text, truncate_document_text
-
-
-def test_build_document_prompt_contains_question_and_document() -> None:
-    prompt = build_document_prompt("Document text", "What is this?")
-
-    assert "What is this?" in prompt
-    assert "Document text" in prompt
+from tools.document import extract_pdf_text, truncate_document_text
 
 
 def test_extract_pdf_text_raises_for_missing_file(tmp_path: Path) -> None:

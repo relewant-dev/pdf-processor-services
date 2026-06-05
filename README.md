@@ -100,7 +100,7 @@ Document-processing blueprints include a `cv-reader-agent` for reading CVs, resu
 - `candidate-profile-extraction`
 - `experience-skills-normalization`
 
-The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions. Persisted candidate payloads keep `education` as a list of obtained degrees, `certification` as a list of earned certifications, and `languages` as a list of candidate languages.
+The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions. Persisted candidate payloads support the `language` field and the `certifications` field alongside JSON payloads for `competences`, `previous_works`, and `education`.
 
 ## Rotative logs for MCP tools
 
@@ -131,11 +131,11 @@ Example:
 OLLAMA_TIMEOUT_SECONDS=600 python src/server.py
 ```
 
-If you still get timeouts, try reducing prompt size by passing `max_chars` in `process_pdf`.
+If you still get timeouts, try reducing the text available for classification and first-time extraction by passing `max_chars` in `process_pdf`.
 
 ## Frontend prompt router API
 
-The HTTP API exposes prompt execution plus PDF upload endpoints. For prompts, the frontend sends only the user message in the JSON body as `{"message":"prompt"}`; the service routes that message to the correct document, health, or general chat tool, uses the inferred tool and related skills as Ollama context when applicable, and returns only the model answer as `{"response":"result of the prompt"}`. For PDFs, the frontend sends `multipart/form-data` with a PDF file and question, and receives an Ollama answer based on the uploaded document content.
+The HTTP API exposes prompt execution plus PDF upload endpoints. For prompts, the frontend sends only the user message in the JSON body as `{"message":"prompt"}`; the service routes that message to the correct document, health, or general chat tool, uses the inferred tool and related skills as Ollama context when applicable, and returns only the model answer as `{"response":"result of the prompt"}`. For PDFs, the frontend sends `multipart/form-data` with a PDF file and question; the service detects CV versus insurance, checks the database first, extracts only missing records, retrieves the database record, and answers using that record as the single source of truth.
 
 ### Run the HTTP API locally
 
@@ -166,13 +166,13 @@ The Swagger page is backed by `http://127.0.0.1:8000/openapi.json`.
 
 ### POST `/api/documents/pdf`
 
-Use this endpoint when the frontend needs to upload a PDF with `multipart/form-data` and ask a question about the document content. The API extracts text from the PDF first, then sends that extracted text to Ollama. Ollama does **not** read the raw PDF binary directly. Scanned or image-only PDFs need OCR before this endpoint can answer questions from their content.
+Use this endpoint when the frontend needs to upload a CV or insurance PDF with `multipart/form-data` and ask a question about the stored document data. The API extracts text from the PDF server-side for classification, document hashing, and first-time structured extraction only. It does not answer directly from the PDF text. Scanned or image-only PDFs need OCR before this endpoint can classify or extract their content.
 
 The form fields are:
 
 - `file`: required PDF upload.
-- `question`: required question to answer from the PDF content.
-- `max_chars`: optional maximum extracted characters to include in the model prompt; defaults to `30000`.
+- `question`: required question to answer from the stored database record.
+- `max_chars`: optional maximum extracted characters available for classification and first-time extraction; defaults to `30000`.
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
@@ -181,9 +181,11 @@ curl -X POST "http://127.0.0.1:8000/api/documents/pdf" \
   -F "max_chars=30000"
 ```
 
-Successful responses contain only the Ollama answer as `{"response":"result based on the uploaded PDF"}`.
+Successful responses contain only the answer as `{"response":"result based on the database record"}`.
 
-When the uploaded text is classified as a CV/resume or insurance policy, the service also upserts vector DB records in the configured `candidates` or `insurances` collection. The vector DB save workflow receives an already-extracted payload, validates it against metadata schemas, optionally splits long `raw_text` into chunk records, and persists the resulting metadata without assigning semantic defaults such as candidate names, statuses, insurance types, or skills inside the save layer. Missing optional metadata fields remain `None` or empty lists unless the extracted payload itself contains a value.
+Expected PDF workflow: upload PDF → detect document type → check the matching database collection → if the record exists, retrieve it and answer from database fields only → if the record is missing, extract structured data once with Ollama, save it, retrieve the saved record, and answer from database fields only. CVs use the `candidates` collection; insurance documents use the `insurances` collection. The removed legacy workflow no longer asks Ollama to answer from PDF text before reprocessing the same PDF for extraction.
+
+Candidate records support `id`, `first_name`, `last_name`, `email`, `phone`, `seniority`, `city`, `country`, `address`, `competences`, `previous_works`, `education`, `current_job_title`, `current_company`, `availability_date`, `notes`, `language`, `certifications`, `created_at`, and `updated_at`. Insurance records support `id`, `candidate_id`, `policy_number`, `insurance_provider`, `insurance_type`, `policy_holder`, `coverage_details`, `start_date`, `end_date`, `premium_amount`, `currency`, `beneficiary`, `created_at`, and `updated_at`. The service also stores operational `document_hash` values to detect duplicates and uses `raw_text` only for indexing/storage, not for answer prompts.
 
 ### POST `/api/prompts/execute`
 
