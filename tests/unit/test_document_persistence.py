@@ -418,6 +418,13 @@ def test_database_first_workflow_uses_existing_candidate_without_extraction(
     )
     monkeypatch.setattr(document_persistence, "extract_payload_with_ollama", fake_extract)
     monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        document_persistence,
+        "log_performance_event",
+        lambda event, **fields: calls.update(
+            {"performance_event": event, "performance_fields": fields}
+        ),
+    )
 
     result = asyncio.run(answer_document_prompt_from_database("CV text", "Who is this?"))
 
@@ -428,6 +435,13 @@ def test_database_first_workflow_uses_existing_candidate_without_extraction(
     assert "raw_text" not in calls["answer_prompt"]
     assert "CV text" not in calls["answer_prompt"]
     assert "Ada" in calls["answer_prompt"]
+    assert calls["performance_event"] == "document_database_workflow_completed"
+    performance_fields = calls["performance_fields"]
+    assert performance_fields["document_type"] == "cv"
+    assert performance_fields["collection_name"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    assert performance_fields["record_existed"] is True
+    assert "initial_lookup_duration_ms" in performance_fields
+    assert "answer_duration_ms" in performance_fields
 
 
 def test_database_first_workflow_extracts_saves_retrieves_then_answers_new_insurance(
@@ -473,6 +487,13 @@ def test_database_first_workflow_extracts_saves_retrieves_then_answers_new_insur
     monkeypatch.setattr(document_persistence, "extract_payload_with_ollama", fake_extract)
     monkeypatch.setattr(document_persistence, "_upsert_payload", fake_upsert_payload)
     monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        document_persistence,
+        "log_performance_event",
+        lambda event, **fields: calls.update(
+            {"performance_event": event, "performance_fields": fields}
+        ),
+    )
 
     result = asyncio.run(answer_document_prompt_from_database("Policy text", "Summarize"))
 
@@ -485,6 +506,14 @@ def test_database_first_workflow_extracts_saves_retrieves_then_answers_new_insur
     assert "raw_text" not in calls["answer_prompt"]
     assert "Policy text" not in calls["answer_prompt"]
     assert "POL-1" in calls["answer_prompt"]
+    assert calls["performance_event"] == "document_database_workflow_completed"
+    performance_fields = calls["performance_fields"]
+    assert performance_fields["document_type"] == "insurance"
+    assert performance_fields["collection_name"] == document_persistence.QDRANT_INSURANCES_COLLECTION
+    assert performance_fields["record_existed"] is False
+    assert "metadata_extraction_duration_ms" in performance_fields
+    assert "upsert_duration_ms" in performance_fields
+    assert "saved_record_lookup_duration_ms" in performance_fields
 
 
 def test_database_first_workflow_rejects_other_documents(monkeypatch: pytest.MonkeyPatch) -> None:

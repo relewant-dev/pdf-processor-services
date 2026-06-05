@@ -25,7 +25,7 @@ def make_upload(
 def test_process_pdf_upload_extracts_uploaded_pdf_and_uses_database_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     def fake_extract_pdf_text(file_path: str) -> str:
         captured["file_path"] = file_path
@@ -36,13 +36,26 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_uses_database_workflow(
     ) -> object:
         captured["workflow_document_text"] = document_text
         captured["workflow_question"] = question
-        return SimpleNamespace(response="PDF answer")
+        return SimpleNamespace(
+            response="PDF answer",
+            document_type="cv",
+            collection_name="candidates",
+            record_id="candidate-1",
+            record_existed=False,
+        )
 
     monkeypatch.setattr(document_upload, "extract_pdf_text", fake_extract_pdf_text)
     monkeypatch.setattr(
         document_upload,
         "answer_document_prompt_from_database",
         fake_answer_document_prompt_from_database,
+    )
+    monkeypatch.setattr(
+        document_upload,
+        "log_performance_event",
+        lambda event, **fields: captured.update(
+            {"performance_event": event, "performance_fields": fields}
+        ),
     )
 
     response = asyncio.run(
@@ -56,6 +69,14 @@ def test_process_pdf_upload_extracts_uploaded_pdf_and_uses_database_workflow(
     assert captured["file_path"].endswith(".pdf")
     assert captured["workflow_document_text"] == "Uploaded PDF text"
     assert captured["workflow_question"] == "What is this document?"
+    assert captured["performance_event"] == "pdf_upload_processed"
+    performance_fields = captured["performance_fields"]
+    assert performance_fields["upload_filename"] == "sample.pdf"
+    assert performance_fields["upload_bytes"] == len(b"%PDF-1.7")
+    assert performance_fields["document_type"] == "cv"
+    assert performance_fields["collection_name"] == "candidates"
+    assert performance_fields["record_existed"] is False
+    assert "total_duration_ms" in performance_fields
 
 
 def test_process_pdf_upload_rejects_non_pdf_filename() -> None:
