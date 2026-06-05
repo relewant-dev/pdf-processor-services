@@ -123,9 +123,17 @@ LOG_FILE=logs/mcp.log LOG_MAX_BYTES=2097152 LOG_BACKUP_COUNT=10 python src/serve
 The `process_pdf` MCP tool sends extracted PDF text to Ollama. Large PDFs may take longer to complete.
 
 Environment variables:
+- `OLLAMA_MODEL` (default: `qwen3-vl:4b`; loaded from `.env` when present)
 - `OLLAMA_TIMEOUT_SECONDS` (default: `300`)
 
-Example:
+Example `.env` values:
+
+```bash
+OLLAMA_MODEL=qwen3-vl:4b
+OLLAMA_TIMEOUT_SECONDS=600
+```
+
+Example one-off override:
 
 ```bash
 OLLAMA_TIMEOUT_SECONDS=600 python src/server.py
