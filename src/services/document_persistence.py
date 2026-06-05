@@ -122,30 +122,55 @@ async def answer_document_prompt_from_database(
 ) -> DocumentWorkflowResult:
     """Run the single CV/insurance pipeline with the database as source of truth.
 
-    The PDF text is used only to classify the document, compute the stable document
-    hash, and extract structured data when the corresponding database record does
-    not already exist. User-facing answers are generated exclusively from the
-    retrieved database payload, never directly from the PDF text.
+    The PDF text is used to compute the stable document hash before invoking
+    Ollama. Existing database records are answered directly from the stored
+    payload, so a previously saved PDF does not depend on another model
+    classification pass. When no record exists, the PDF text is classified and
+    extracted before the answer is generated from the retrieved database payload.
     """
+    try:
+        return await _answer_document_prompt_from_database(document_text, question)
+    except VectorDbMetadataError as exc:
+        raise ToolError(
+            "Unable to process PDF metadata with Ollama. "
+            f"{exc} Ensure the configured model supports JSON output and retry."
+        ) from exc
+
+
+async def _answer_document_prompt_from_database(
+    document_text: str, question: str
+) -> DocumentWorkflowResult:
+    document_hash = _document_hash(document_text)
+    existing_record = await _get_existing_document_record(document_hash)
+    if existing_record is not None:
+        domain, collection_name, record = existing_record
+        response = await build_answer_from_database_record(
+            question=question,
+            document_type=domain,
+            record=record,
+        )
+        return DocumentWorkflowResult(
+            response=response,
+            document_type=domain,
+            collection_name=collection_name,
+            record_id=str(record.get("id")) if record.get("id") is not None else None,
+            record_existed=True,
+        )
+
     domain = await infer_pdf_domain_with_ollama(document_text, question)
     if domain == "other":
         raise ToolError("Uploaded PDF must be either a CV or an insurance document.")
 
     metadata_kind = _metadata_kind_for_domain(domain)
     collection_name = _collection_for_metadata_kind(metadata_kind)
-    document_hash = _document_hash(document_text)
-
+    extracted_payload = await extract_payload_with_ollama(document_text, metadata_kind)
+    await _upsert_payload(collection_name, extracted_payload)
     record = await get_document_by_hash(collection_name, document_hash)
-    record_existed = record is not None
     if record is None:
-        extracted_payload = await extract_payload_with_ollama(document_text, metadata_kind)
-        await _upsert_payload(collection_name, extracted_payload)
-        record = await get_document_by_hash(collection_name, document_hash)
-        if record is None:
-            raise ToolError(
-                "Document was saved but could not be retrieved from the database. "
-                "Check Qdrant availability and collection indexing."
-            )
+        raise ToolError(
+            "Document was saved but could not be retrieved from the database. "
+            "Check Qdrant availability and collection indexing."
+        )
 
     response = await build_answer_from_database_record(
         question=question,
@@ -157,14 +182,34 @@ async def answer_document_prompt_from_database(
         document_type=domain,
         collection_name=collection_name,
         record_id=str(record.get("id")) if record.get("id") is not None else None,
-        record_existed=record_existed,
+        record_existed=False,
     )
+
+
+async def _get_existing_document_record(
+    document_hash: str,
+) -> tuple[DocumentDomain, str, dict[str, Any]] | None:
+    candidates_record = await get_document_by_hash(
+        QDRANT_CANDIDATES_COLLECTION, document_hash
+    )
+    if candidates_record is not None:
+        return "cv", QDRANT_CANDIDATES_COLLECTION, candidates_record
+
+    insurance_record = await get_document_by_hash(
+        QDRANT_INSURANCES_COLLECTION, document_hash
+    )
+    if insurance_record is not None:
+        return "insurance", QDRANT_INSURANCES_COLLECTION, insurance_record
+
+    return None
 
 
 async def infer_pdf_domain_with_ollama(document_text: str, question: str) -> DocumentDomain:
     """Classify the uploaded PDF as cv, insurance, or other."""
     prompt = _build_domain_classification_prompt(document_text, question)
-    raw_result = await chat_with_ollama(prompt)
+    raw_result = await chat_with_ollama(
+        prompt, response_format=_domain_classification_schema()
+    )
     payload = _parse_json_object(raw_result)
     domain = str(payload.get("document_type", "")).strip().lower()
     if domain not in {"cv", "insurance", "other"}:
@@ -289,6 +334,20 @@ def build_vector_db_metadata(
     return metadata
 
 
+def _domain_classification_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "document_type": {
+                "type": "string",
+                "enum": ["cv", "insurance", "other"],
+            }
+        },
+        "required": ["document_type"],
+        "additionalProperties": False,
+    }
+
+
 def _build_domain_classification_prompt(document_text: str, question: str) -> str:
     return (
         "Classify the uploaded document for database routing. "
@@ -353,15 +412,36 @@ def _build_database_answer_prompt(
 
 
 def _parse_json_object(raw_result: str) -> dict[str, Any]:
+    stripped_result = raw_result.strip()
+    if not stripped_result:
+        raise VectorDbMetadataError("Ollama returned an empty metadata response.")
+
     try:
-        parsed = json.loads(raw_result.strip())
-    except json.JSONDecodeError as exc:
-        raise VectorDbMetadataError(
-            "Ollama returned metadata that was not valid JSON."
-        ) from exc
+        parsed = json.loads(stripped_result)
+    except json.JSONDecodeError:
+        parsed = _parse_embedded_json_object(stripped_result)
+
     if not isinstance(parsed, dict):
         raise VectorDbMetadataError("Ollama metadata response must be a JSON object.")
     return parsed
+
+
+def _parse_embedded_json_object(raw_result: str) -> Any:
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(raw_result):
+        if character != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(raw_result[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise VectorDbMetadataError(
+        "Ollama returned metadata that was not valid JSON. "
+        "Expected a JSON object such as {\"document_type\": \"cv\"}."
+    )
 
 
 def _with_service_metadata(
