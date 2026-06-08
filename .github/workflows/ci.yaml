@@ -102,7 +102,7 @@ jobs:
 
       - name: Deploy on Proxmox machine
         run: |
-          sshpass -p "${{ secrets.RW_AI_DEV_SERVER }}" ssh -o StrictHostKeyChecking=no administrator@192.168.100.206 << 'EOF'
+          sshpass -p "${{ secrets.RW_AI_DEV_SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no administrator@192.168.100.206 << 'EOF'
             cd /home/alessandro/Desktop/smart-ide/smart-ide-services
 
             echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u relewant-dev --password-stdin
