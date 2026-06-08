@@ -98,6 +98,9 @@ jobs:
         run: |
           ping -c 3 192.168.100.206
 
+      - name: Print password
+        run: |
+          echo ${{ secrets.RW_AI_DEV_SERVER_PASSWORD }}
 
 
       - name: Deploy on Proxmox machine
