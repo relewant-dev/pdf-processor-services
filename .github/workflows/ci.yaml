@@ -68,3 +68,39 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/relewant-dev/smart-ide-services:latest
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Install WireGuard and SSH tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard openresolv openssh-client sshpass
+
+      - name: Configure VPN
+        run: |
+          sudo mkdir -p /etc/wireguard
+          echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          sudo wg-quick up wg0
+
+      - name: Test VPN connection
+        run: ping -c 3 192.168.100.206
+
+      # Password-based SSH is supported for this deployment, but SSH keys would be safer.
+      - name: Deploy on Proxmox machine
+        run: |
+          sshpass -p "${{ secrets.PROXMOX_PASSWORD }}" ssh -o StrictHostKeyChecking=no administrator@192.168.100.206 << 'EOF'
+            cd /home/alessandro/Desktop/smart-ide/smart-ide-services
+
+            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u relewant-dev --password-stdin
+
+            docker compose pull
+            docker compose up -d --build
+          EOF
