@@ -1,18 +1,6 @@
 version: "3.9"
 
 services:
-  frontend:
-    image: ghcr.io/my-org/my-app:latest
-    container_name: smart-ide-frontend
-    depends_on:
-      - backend
-    environment:
-      API_BASE_URL: http://backend:8000
-      VITE_API_BASE_URL: http://backend:8000
-      NEXT_PUBLIC_API_BASE_URL: http://backend:8000
-    ports:
-      - "3000:3000"
-
   backend:
     build:
       context: .
