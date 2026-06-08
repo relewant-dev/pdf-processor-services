@@ -104,6 +104,14 @@ jobs:
             cd /home/administrator/smart-ide-services
             echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u relewant-dev --password-stdin
 
+            git fetch origin main
+            git checkout main
+            git pull origin main
+
+            echo "Git repository successfully updated from main"
+
             docker compose pull
             docker compose up -d --build
+
+            echo "Docker Compose deployment completed successfully"
           EOF
