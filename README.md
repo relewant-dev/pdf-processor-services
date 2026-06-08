@@ -109,6 +109,7 @@ The MCP server now writes tool invocation logs using a rotating file handler.
 Environment variables:
 - `LOG_LEVEL` (default: `INFO`)
 - `LOG_FILE` (default: `smart-ide-services.log`)
+- `PERFORMANCE_LOG_FILE` (default: `performance.log`)
 - `LOG_MAX_BYTES` (default: `1048576`)
 - `LOG_BACKUP_COUNT` (default: `5`)
 
@@ -116,6 +117,17 @@ Example:
 
 ```bash
 LOG_FILE=logs/mcp.log LOG_MAX_BYTES=2097152 LOG_BACKUP_COUNT=10 python src/server.py
+```
+
+
+## Backend performance log
+
+PDF processing writes structured JSON-line performance events to `performance.log` by default. Each successful uploaded-PDF workflow records upload/write, PDF text extraction, truncation, database workflow, and total durations. The database-first workflow also records whether the document already existed, the target collection, document type, and timings for lookup, classification, metadata extraction, upsert, saved-record retrieval, and answer generation as applicable.
+
+Use `PERFORMANCE_LOG_FILE` to choose another path while keeping the default file name for local development:
+
+```bash
+PERFORMANCE_LOG_FILE=logs/performance.log python -m uvicorn http_api:app --app-dir src --reload
 ```
 
 ## PDF processing and Ollama timeout tuning
