@@ -148,3 +148,94 @@ def test_persist_document_if_supported_saves_new_insurance(
         calls["upsert_collection"] == document_persistence.QDRANT_INSURANCES_COLLECTION
     )
     assert calls["upsert_hash"] == calls["exists_hash"]
+
+
+def test_build_metadata_extraction_prompt_uses_compact_contract() -> None:
+    prompt = document_persistence._build_metadata_extraction_prompt(
+        "Jane Doe\nSenior Python engineer",
+        "candidate",
+    )
+
+    assert "JSON Schema" not in prompt
+    assert "model_json_schema" not in prompt
+    assert "first_name" in prompt
+    assert "certifications" in prompt
+    assert "Return only valid JSON" in prompt
+
+
+def test_normalize_extracted_candidate_payload_fills_missing_optional_fields() -> None:
+    normalized = document_persistence._normalize_extracted_payload(
+        {"first_name": "Jane", "last_name": "Doe", "competences": ["Python"]},
+        "candidate",
+    )
+    validated = document_persistence.build_vector_db_metadata(normalized, "candidate")
+
+    assert validated["first_name"] == "Jane"
+    assert validated["email"] is None
+    assert validated["previous_works"] == []
+    assert validated["education"] == []
+    assert validated["certifications"] == []
+    assert validated["competences"] == ["Python"]
+
+
+def test_normalize_extracted_payload_preserves_service_metadata() -> None:
+    normalized = document_persistence._normalize_extracted_payload(
+        {
+            "id": "candidate-existing",
+            "document_hash": "abc123",
+            "raw_text": "raw",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-02T00:00:00+00:00",
+        },
+        "candidate",
+    )
+
+    assert normalized["id"] == "candidate-existing"
+    assert normalized["document_hash"] == "abc123"
+    assert normalized["raw_text"] == "raw"
+    assert normalized["created_at"] == "2026-01-01T00:00:00+00:00"
+    assert normalized["updated_at"] == "2026-01-02T00:00:00+00:00"
+
+
+def test_with_service_metadata_adds_document_identity() -> None:
+    payload = document_persistence._with_service_metadata(
+        {"first_name": "Jane"},
+        "candidate",
+        "Jane Doe\nSenior engineer",
+    )
+
+    assert payload["id"].startswith("candidate-")
+    assert payload["document_hash"]
+    assert payload["raw_text"] == "Jane Doe\nSenior engineer"
+    assert payload["created_at"]
+    assert payload["updated_at"]
+    assert payload["first_name"] == "Jane"
+
+
+def test_extract_payload_with_ollama_uses_json_response_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_chat_with_ollama(
+        prompt: str, response_format: object = None
+    ) -> str:
+        captured["prompt"] = prompt
+        captured["response_format"] = response_format
+        return '{"first_name":"Jane","last_name":"Doe"}'
+
+    monkeypatch.setattr(
+        document_persistence, "chat_with_ollama", fake_chat_with_ollama
+    )
+
+    payload = asyncio.run(
+        document_persistence.extract_payload_with_ollama(
+            "Jane Doe\nSenior engineer",
+            "candidate",
+        )
+    )
+
+    assert captured["response_format"] == "json"
+    assert "JSON Schema" not in captured["prompt"]
+    assert payload["first_name"] == "Jane"
+    assert payload["email"] is None

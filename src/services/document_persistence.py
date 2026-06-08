@@ -1,18 +1,88 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import re
 from datetime import datetime, timezone
-from typing import Any
+from time import perf_counter
+from typing import Any, Literal
 
 import httpx
+from fastmcp.exceptions import ToolError
+from pydantic import BaseModel, ConfigDict, Field
 
+from clients.ollama import chat_with_ollama
 from config import (
     QDRANT_CANDIDATES_COLLECTION,
     QDRANT_INSURANCES_COLLECTION,
     QDRANT_TIMEOUT_SECONDS,
     QDRANT_URL,
+    SERVICE_NAME,
 )
+
+logger = logging.getLogger(SERVICE_NAME)
+
+MetadataKind = Literal["candidate", "insurance"]
+
+
+class CandidateVectorMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    document_hash: str | None = None
+    raw_text: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    seniority: str | None = None
+    city: str | None = None
+    country: str | None = None
+    address: str | None = None
+    competences: list[Any] = Field(default_factory=list)
+    previous_works: list[Any] = Field(default_factory=list)
+    education: list[Any] = Field(default_factory=list)
+    current_job_title: str | None = None
+    current_company: str | None = None
+    availability_date: str | None = None
+    notes: str | None = None
+    language: str | None = None
+    certifications: list[Any] = Field(default_factory=list)
+
+
+class InsuranceVectorMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str | None = None
+    document_hash: str | None = None
+    raw_text: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    insurance_number: str | None = None
+    insurance_type: str | None = None
+    provider_name: str | None = None
+    status: str | None = None
+    coverage_details: dict[str, Any] = Field(default_factory=dict)
+    documents: list[Any] = Field(default_factory=list)
+
+
+METADATA_MODELS: dict[MetadataKind, type[BaseModel]] = {
+    "candidate": CandidateVectorMetadata,
+    "insurance": InsuranceVectorMetadata,
+}
+
+LIST_FIELDS: dict[MetadataKind, set[str]] = {
+    "candidate": {"competences", "previous_works", "education", "certifications"},
+    "insurance": {"documents"},
+}
+
+DICT_FIELDS: dict[MetadataKind, set[str]] = {
+    "candidate": set(),
+    "insurance": {"coverage_details"},
+}
 
 
 def infer_pdf_domain(document_text: str, question: str) -> str:
@@ -59,7 +129,7 @@ def build_candidate_payload(document_text: str) -> dict[str, Any]:
         "email": email,
         "phone": phone,
         "seniority": _detect_seniority(document_text),
-        "competences": {},
+        "competences": [],
         "previous_works": [],
         "education": [],
         "raw_text": document_text,
@@ -99,7 +169,119 @@ def build_insurance_payload(document_text: str) -> dict[str, Any]:
     }
 
 
+def build_vector_db_metadata(
+    payload: dict[str, Any], metadata_kind: MetadataKind
+) -> dict[str, Any]:
+    """Validate extracted metadata and return a Qdrant-safe dictionary."""
+    metadata_model = METADATA_MODELS[metadata_kind]
+    return metadata_model.model_validate(payload).model_dump(mode="json")
+
+
+async def extract_payload_with_ollama(
+    document_text: str,
+    metadata_kind: MetadataKind,
+) -> dict[str, Any]:
+    """Extract structured metadata with Ollama while keeping Pydantic validation."""
+    prompt = _build_metadata_extraction_prompt(document_text, metadata_kind)
+    metrics = {"metadata_prompt_chars": len(prompt)}
+
+    ollama_started_at = perf_counter()
+    raw_response = await chat_with_ollama(prompt, response_format="json")
+    metrics["metadata_ollama_duration_ms"] = _elapsed_ms(ollama_started_at)
+    metrics["metadata_raw_response_chars"] = len(raw_response)
+
+    parse_validate_started_at = perf_counter()
+    parsed_payload = _parse_json_object(raw_response)
+    normalized_payload = _normalize_extracted_payload(parsed_payload, metadata_kind)
+    validated_payload = build_vector_db_metadata(normalized_payload, metadata_kind)
+    metrics["metadata_parse_validate_duration_ms"] = _elapsed_ms(
+        parse_validate_started_at
+    )
+    logger.info(
+        "metadata_extraction_completed metadata_kind=%s %s",
+        metadata_kind,
+        " ".join(f"{key}={value}" for key, value in metrics.items()),
+    )
+    return validated_payload
+
+
+def _build_metadata_extraction_prompt(
+    document_text: str, metadata_kind: MetadataKind
+) -> str:
+    if metadata_kind == "candidate":
+        contract = "\n".join(
+            (
+                "Expected JSON keys: id, first_name, last_name, email, phone, "
+                "seniority, city, country, address, competences, previous_works, "
+                "education, current_job_title, current_company, availability_date, "
+                "notes, language, certifications.",
+                "Use strings or null for scalar fields.",
+                "Use arrays for competences, previous_works, education, and "
+                "certifications; use [] when no evidence exists.",
+                "Capture only evidence from the document; do not infer unsupported facts.",
+            )
+        )
+    else:
+        contract = "\n".join(
+            (
+                "Expected JSON keys: id, insurance_number, insurance_type, "
+                "provider_name, status, coverage_details, documents.",
+                "Use strings or null for scalar fields.",
+                "Use an object for coverage_details and an array for documents; "
+                "use {} or [] when no evidence exists.",
+                "Capture only evidence from the document; do not infer unsupported facts.",
+            )
+        )
+
+    return (
+        f"Extract {metadata_kind} metadata from the document.\n"
+        "Return only valid JSON. Do not include markdown, comments, or explanations.\n"
+        "Omit these service-owned fields or set them null: id, document_hash, "
+        "raw_text, created_at, updated_at.\n"
+        f"{contract}\n\n"
+        "Document text:\n"
+        f"{document_text}"
+    )
+
+
+def _normalize_extracted_payload(
+    payload: dict[str, Any], metadata_kind: MetadataKind
+) -> dict[str, Any]:
+    """Fill missing metadata fields before Pydantic validation."""
+    metadata_model = METADATA_MODELS[metadata_kind]
+    normalized = dict(payload)
+    for field_name in metadata_model.model_fields:
+        if field_name in normalized:
+            continue
+        if field_name in LIST_FIELDS[metadata_kind]:
+            normalized[field_name] = []
+        elif field_name in DICT_FIELDS[metadata_kind]:
+            normalized[field_name] = {}
+        else:
+            normalized[field_name] = None
+    return normalized
+
+
+def _with_service_metadata(
+    payload: dict[str, Any], metadata_kind: MetadataKind, document_text: str
+) -> dict[str, Any]:
+    document_hash = _document_hash(document_text)
+    service_payload = dict(payload)
+    now = _utc_timestamp()
+    service_payload.update(
+        {
+            "id": f"{metadata_kind}-{document_hash}",
+            "document_hash": document_hash,
+            "raw_text": document_text,
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    return service_payload
+
+
 async def persist_document_if_supported(document_text: str, question: str) -> str:
+    workflow_metrics: dict[str, int] = {}
     domain = infer_pdf_domain(document_text, question)
     if domain == "cv":
         payload = build_candidate_payload(document_text)
@@ -107,6 +289,11 @@ async def persist_document_if_supported(document_text: str, question: str) -> st
     elif domain == "insurance":
         payload = build_insurance_payload(document_text)
         await _upsert_payload_if_new(QDRANT_INSURANCES_COLLECTION, payload)
+    logger.info(
+        "document_database_workflow_completed domain=%s %s",
+        domain,
+        " ".join(f"{key}={value}" for key, value in workflow_metrics.items()),
+    )
     return domain
 
 
@@ -160,6 +347,20 @@ async def _upsert_payload(collection_name: str, payload: dict[str, Any]) -> None
     timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
         await client.put(f"/collections/{collection_name}/points", json=body)
+
+
+def _parse_json_object(raw_response: str) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        raise ToolError("Ollama returned invalid JSON for metadata extraction.") from exc
+    if not isinstance(parsed, dict):
+        raise ToolError("Ollama metadata extraction must return a JSON object.")
+    return parsed
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((perf_counter() - started_at) * 1000)
 
 
 def _qdrant_point_id(value: str) -> int:

@@ -8,7 +8,7 @@ from fastmcp.exceptions import ToolError
 from config import OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL
 
 
-async def chat_with_ollama(prompt: str) -> str:
+async def chat_with_ollama(prompt: str, response_format: Any | None = None) -> str:
     if not prompt.strip():
         raise ToolError("Prompt must not be empty.")
 
@@ -17,6 +17,8 @@ async def chat_with_ollama(prompt: str) -> str:
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
     }
+    if response_format is not None:
+        payload["format"] = response_format
 
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
