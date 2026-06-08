@@ -1,6 +1,38 @@
 version: "3.9"
 
 services:
+  frontend:
+    image: ghcr.io/my-org/my-app:latest
+    container_name: smart-ide-frontend
+    depends_on:
+      - backend
+    environment:
+      API_BASE_URL: http://backend:8000
+      VITE_API_BASE_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: http://backend:8000
+    ports:
+      - "3000:3000"
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/relewant-dev/smart-ide-services:latest
+    container_name: smart-ide-backend
+    env_file:
+      - .env
+    environment:
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl:4b}
+      QDRANT_URL: http://qdrant:6333
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - qdrant
+    ports:
+      - "8000:8000"
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: qdrant
