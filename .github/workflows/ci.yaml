@@ -99,7 +99,7 @@ jobs:
           ping -c 3 192.168.100.206
 
 
-      Password-based SSH is supported for this deployment, but SSH keys would be safer.
+
       - name: Deploy on Proxmox machine
         run: |
           sshpass -p "${{ secrets.RW_AI_DEV_SERVER }}" ssh -o StrictHostKeyChecking=no administrator@192.168.100.206 << 'EOF'
