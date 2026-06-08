@@ -68,6 +68,3 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/relewant-dev/smart-ide-services:latest
-
-      - name: Run Docker Compose
-        run: docker compose up -d
