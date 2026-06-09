@@ -76,7 +76,7 @@ jobs:
           repository: relewant-dev/pdf-processor-infra
           event-type: backend-deployed
   
-  # changed changed PAT in secrets INFRA_REPO_PAT
+  # add secrets in pdf-processor-infra for VPN config and ssh access to the proxmox machine
 
   # deploy:
   #   runs-on: ubuntu-latest
