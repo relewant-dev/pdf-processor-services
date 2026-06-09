@@ -69,13 +69,13 @@ jobs:
           push: true
           tags: ghcr.io/relewant-dev/smart-ide-services:latest
       
-      - name: Trigger pdf-process-infra deployment
+      - name: Trigger pdf-processor-infra deployment
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.INFRA_REPO_PAT }}
-          repository: relewant-dev/pdf-process-infra
+          repository: relewant-dev/pdf-processor-infra
           event-type: backend-deployed
-    
+          
   # deploy:
   #   runs-on: ubuntu-latest
   #   needs: build
