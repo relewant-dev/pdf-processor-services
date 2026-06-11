@@ -67,7 +67,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/relewant-dev/smart-ide-services:latest
+          tags: ghcr.io/relewant-dev/pdf-processor-services:latest
       
       - name: Trigger pdf-processor-infra deployment
         uses: peter-evans/repository-dispatch@v3
@@ -75,53 +75,3 @@ jobs:
           token: ${{ secrets.INFRA_REPO_PAT }}
           repository: relewant-dev/pdf-processor-infra
           event-type: backend-deployed
-  
-  # add secrets in pdf-processor-infra for VPN config and ssh access to the proxmox machine
-
-  # deploy:
-  #   runs-on: ubuntu-latest
-  #   needs: build
-  #   # if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-  #   permissions:
-  #     contents: read
-  #     packages: read
-
-  #   steps:
-  #     - name: Install WireGuard and SSH tools
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y wireguard resolvconf openssh-client sshpass
-
-  #     - name: Configure VPN
-  #       run: |
-  #         sudo mkdir -p /etc/wireguard
-  #         echo "${{ secrets.WG_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
-  #         sudo chmod 600 /etc/wireguard/wg0.conf
-  #         sudo wg-quick up wg0
-
-  #     - name: Verify WireGuard status
-  #       run: |
-  #         sudo wg show
-
-  #     - name: Test VPN connection
-  #       run: |
-  #         ping -c 3 192.168.100.206
-
-  #     - name: Deploy on Proxmox machine
-  #       run: |
-  #         sshpass -p "${{ secrets.RW_AI_DEV_SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no administrator@192.168.100.206 << 'EOF'
-  #           cd /home/administrator/smart-ide-services
-  #           echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u relewant-dev --password-stdin
-
-  #           git fetch origin main
-  #           git checkout main
-  #           git pull origin main
-
-  #           echo "Git repository successfully updated from main"
-
-  #           docker compose pull
-  #           docker compose up -d --build
-
-  #           echo "Docker Compose deployment completed successfully"
-  #         EOF
