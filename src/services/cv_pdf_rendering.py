@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import logging
 import textwrap
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from fastmcp.exceptions import ToolError
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEMPLATE_PATH = REPOSITORY_ROOT / "stationery" / "relewant-sa-letterhead.pdf"
+logger = logging.getLogger(__name__)
 
 
 def render_anonymized_cv_pdf(
@@ -28,6 +31,8 @@ def render_anonymized_cv_pdf(
         from pypdf import PdfReader, PdfWriter
 
         template_reader = PdfReader(str(template_path))
+        template_page_count = len(template_reader.pages)
+        logger.debug("CV PDF template page count: %s", template_page_count)
         if not template_reader.pages:
             raise ToolError("ReleWant letterhead template does not contain any pages.")
 
@@ -37,15 +42,29 @@ def render_anonymized_cv_pdf(
         _write_text_overlay(cleaned_text, overlay_path, page_width, page_height)
 
         overlay_reader = PdfReader(str(overlay_path))
-        overlay_pages = _deduplicate_identical_overlay_pages(list(overlay_reader.pages))
-        if not overlay_pages:
+        overlay_pages = list(overlay_reader.pages)
+        generated_content_page_count = len(overlay_pages)
+        logger.debug("CV PDF generated content page count: %s", generated_content_page_count)
+        output_pages = _remove_consecutive_duplicate_pdf_pages(overlay_pages)
+        if len(output_pages) != generated_content_page_count:
+            logger.debug(
+                "CV PDF removed %s consecutive duplicate generated content page(s).",
+                generated_content_page_count - len(output_pages),
+            )
+        if not output_pages:
             raise ToolError("Generated anonymized CV overlay does not contain any pages.")
+
         writer = PdfWriter()
-        for overlay_page in overlay_pages:
+        for page_number, overlay_page in enumerate(output_pages, start=1):
+            logger.debug("CV PDF merging generated content page %s onto template page 1.", page_number)
             base_page = copy.deepcopy(template_reader.pages[0])
             base_page.merge_page(overlay_page)
             writer.add_page(base_page)
+            logger.debug("CV PDF added output page %s.", page_number)
 
+        writer_pages = getattr(writer, "pages", output_pages)
+        final_output_page_count = len(writer_pages)
+        logger.debug("CV PDF final output page count before saving: %s", final_output_page_count)
         with output_path.open("wb") as output_file:
             writer.write(output_file)
         return output_path
@@ -58,26 +77,41 @@ def render_anonymized_cv_pdf(
             overlay_path.unlink(missing_ok=True)
 
 
-def _deduplicate_identical_overlay_pages(pages: list[object]) -> list[object]:
-    """Collapse accidental duplicate overlay pages while preserving real multipage CVs."""
+def _remove_consecutive_duplicate_pdf_pages(pages: list[object]) -> list[object]:
+    """Remove consecutive duplicate generated pages from the PDF pipeline."""
     if len(pages) <= 1:
         return pages
 
-    fingerprints = [_page_text_fingerprint(page) for page in pages]
-    first_fingerprint = fingerprints[0]
-    if first_fingerprint and all(
-        fingerprint == first_fingerprint for fingerprint in fingerprints[1:]
-    ):
-        return [pages[0]]
-    return pages
+    unique_pages = [pages[0]]
+    previous_fingerprint = _pdf_page_fingerprint(pages[0])
+    for page in pages[1:]:
+        fingerprint = _pdf_page_fingerprint(page)
+        if fingerprint and fingerprint == previous_fingerprint:
+            continue
+        unique_pages.append(page)
+        previous_fingerprint = fingerprint
+    return unique_pages
 
 
-def _page_text_fingerprint(page: object) -> str:
+def _pdf_page_fingerprint(page: object) -> str:
+    contents = getattr(page, "get_contents", None)
+    if callable(contents):
+        page_contents = contents()
+        if page_contents is not None:
+            streams = page_contents if isinstance(page_contents, list) else [page_contents]
+            stream_data = b"".join(
+                stream.get_data() for stream in streams if hasattr(stream, "get_data")
+            )
+            if stream_data:
+                return hashlib.sha256(stream_data).hexdigest()
+
     extract_text = getattr(page, "extract_text", None)
-    if not callable(extract_text):
-        return ""
-    page_text = extract_text() or ""
-    return "\n".join(line.strip() for line in page_text.splitlines() if line.strip())
+    if callable(extract_text):
+        page_text = extract_text() or ""
+        normalized_text = "\n".join(line.strip() for line in page_text.splitlines() if line.strip())
+        if normalized_text:
+            return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    return ""
 
 
 def _write_text_overlay(
