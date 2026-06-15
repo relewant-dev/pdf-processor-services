@@ -72,7 +72,7 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
         "**Experience**\n"
         "• Senior Developer"
     )
-    assert "Keep the candidate name" in captured["prompt"]
+    assert "Keep only the candidate first/given name" in captured["prompt"]
     assert "Remove phone numbers" in captured["prompt"]
     assert "Remove email addresses" in captured["prompt"]
     assert "Remove street addresses" in captured["prompt"]
@@ -85,7 +85,7 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert "Skills" in captured["prompt"]
     assert "Certifications" in captured["prompt"]
     assert "Hobby" in captured["prompt"]
-    assert "Section titles must be bold" in captured["prompt"]
+    assert "Section titles must be bold in the exported PDF" in captured["prompt"]
     assert "Use round bullet points" in captured["prompt"]
     assert "Return only the formatted anonymized CV content" in captured["prompt"]
     assert "Do not start with an introductory sentence" in captured["prompt"]
@@ -208,6 +208,54 @@ def test_render_anonymized_cv_pdf_collapses_identical_duplicate_overlay_pages(
     assert captured["writes"] == 1
 
 
+def test_render_anonymized_cv_pdf_collapses_nonconsecutive_duplicate_overlay_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    template_path = tmp_path / "template.pdf"
+    template_path.write_bytes(b"template")
+    output_path = tmp_path / "out.pdf"
+    captured: dict[str, int] = {"added_pages": 0}
+
+    class FakePage:
+        mediabox = SimpleNamespace(width=595, height=842)
+
+        def __init__(self, text: str = "") -> None:
+            self.text = text
+
+        def extract_text(self) -> str:
+            return self.text
+
+        def merge_page(self, other: object) -> None:
+            self.other = other
+
+    class FakeReader:
+        def __init__(self, path: str) -> None:
+            if path.endswith(".overlay.pdf"):
+                self.pages = [FakePage("Experience"), FakePage("Education"), FakePage("Experience")]
+            else:
+                self.pages = [FakePage()]
+
+    class FakeWriter:
+        def add_page(self, page: object) -> None:
+            captured["added_pages"] += 1
+
+        def write(self, file_obj: object) -> None:
+            file_obj.write(b"%PDF fake anonymized cv")
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=FakeReader, PdfWriter=FakeWriter))
+    monkeypatch.setattr(
+        cv_pdf_rendering,
+        "_write_text_overlay",
+        lambda text, overlay_path, width, height: overlay_path.write_bytes(b"overlay"),
+    )
+
+    cv_pdf_rendering.render_anonymized_cv_pdf("Experience\nEducation", output_path, template_path=template_path)
+
+    assert captured["added_pages"] == 2
+
+
 def test_render_anonymized_cv_pdf_preserves_distinct_overlay_pages(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -254,6 +302,13 @@ def test_render_anonymized_cv_pdf_preserves_distinct_overlay_pages(
     cv_pdf_rendering.render_anonymized_cv_pdf("Experience\nEducation", output_path, template_path=template_path)
 
     assert captured["added_pages"] == 2
+
+
+def test_pdf_line_style_renders_markdown_heading_as_real_bold_text() -> None:
+    font_name, line = cv_pdf_rendering._pdf_line_style("**Experience**", "Helvetica", "Helvetica-Bold")
+
+    assert font_name == "Helvetica-Bold"
+    assert line == "Experience"
 
 
 def test_anonymized_cv_endpoint_returns_pdf_and_deletes_temp_dir(monkeypatch: pytest.MonkeyPatch) -> None:

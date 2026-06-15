@@ -45,10 +45,10 @@ def render_anonymized_cv_pdf(
         overlay_pages = list(overlay_reader.pages)
         generated_content_page_count = len(overlay_pages)
         logger.debug("CV PDF generated content page count: %s", generated_content_page_count)
-        output_pages = _remove_consecutive_duplicate_pdf_pages(overlay_pages)
+        output_pages = _remove_duplicate_pdf_pages(overlay_pages)
         if len(output_pages) != generated_content_page_count:
             logger.debug(
-                "CV PDF removed %s consecutive duplicate generated content page(s).",
+                "CV PDF removed %s duplicate generated content page(s).",
                 generated_content_page_count - len(output_pages),
             )
         if not output_pages:
@@ -77,19 +77,19 @@ def render_anonymized_cv_pdf(
             overlay_path.unlink(missing_ok=True)
 
 
-def _remove_consecutive_duplicate_pdf_pages(pages: list[object]) -> list[object]:
-    """Remove consecutive duplicate generated pages from the PDF pipeline."""
-    if len(pages) <= 1:
-        return pages
+def _remove_duplicate_pdf_pages(pages: list[object]) -> list[object]:
+    """Remove generated pages that contain exactly the same information."""
+    unique_pages: list[object] = []
+    seen_fingerprints: set[str] = set()
 
-    unique_pages = [pages[0]]
-    previous_fingerprint = _pdf_page_fingerprint(pages[0])
-    for page in pages[1:]:
+    for page in pages:
         fingerprint = _pdf_page_fingerprint(page)
-        if fingerprint and fingerprint == previous_fingerprint:
+        if fingerprint and fingerprint in seen_fingerprints:
             continue
         unique_pages.append(page)
-        previous_fingerprint = fingerprint
+        if fingerprint:
+            seen_fingerprints.add(fingerprint)
+
     return unique_pages
 
 
@@ -129,6 +129,7 @@ def _write_text_overlay(
     top_margin = 42 * mm
     bottom_margin = 22 * mm
     font_name = "Helvetica"
+    bold_font_name = "Helvetica-Bold"
     font_size = 10
     line_height = 14
     chars_per_line = max(
@@ -147,6 +148,15 @@ def _write_text_overlay(
                 pdf.setFillColor(HexColor("#222222"))
                 pdf.setFont(font_name, font_size)
                 y = page_height - top_margin
-            pdf.drawString(left_margin, y, line)
+            line_font_name, drawable_line = _pdf_line_style(line, font_name, bold_font_name)
+            pdf.setFont(line_font_name, font_size)
+            pdf.drawString(left_margin, y, drawable_line)
             y -= line_height
     pdf.save()
+
+
+def _pdf_line_style(line: str, font_name: str, bold_font_name: str) -> tuple[str, str]:
+    stripped_line = line.strip()
+    if stripped_line.startswith("**") and stripped_line.endswith("**") and len(stripped_line) > 4:
+        return bold_font_name, stripped_line.removeprefix("**").removesuffix("**")
+    return font_name, line

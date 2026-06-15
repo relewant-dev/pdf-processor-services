@@ -7,7 +7,7 @@ from clients.ollama import chat_with_ollama
 CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize and format CV content for PDF export.
 
 Privacy rules:
-- Keep the candidate name.
+- Keep only the candidate first/given name; remove surnames/family names.
 - Remove phone numbers.
 - Remove email addresses.
 - Remove street addresses.
@@ -16,7 +16,7 @@ Privacy rules:
 - Remove postal codes.
 - Keep only the city from any address, for example "Via Roma 10, 6900 Lugano, Switzerland" becomes "Lugano".
 - Preserve professional experience, education, skills, certifications, languages, projects, technical competencies, hobbies, and professional summary when present.
-- Remove or transform only personally identifiable information other than the candidate name.
+- Remove or transform all personally identifiable information other than the candidate first/given name.
 
 Formatting rules:
 - Return the anonymized CV using exactly these sections and this order:
@@ -26,7 +26,7 @@ Formatting rules:
   4. Skills
   5. Certifications
   6. Hobby
-- Section titles must be bold, for example **Anagraphical data**.
+- Section titles must be bold in the exported PDF. Mark each section title with markdown bold delimiters, for example **Anagraphical data**, so the renderer can draw real bold text without showing the delimiters.
 - Use round bullet points for lists.
 - If a section has no supported content in the CV, include the bold section title and write a round bullet point with "Not specified".
 
