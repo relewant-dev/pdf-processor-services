@@ -131,6 +131,104 @@ def test_render_anonymized_cv_pdf_writes_output_with_template(monkeypatch: pytes
     assert not output_path.with_suffix(".overlay.pdf").exists()
 
 
+def test_render_anonymized_cv_pdf_collapses_identical_duplicate_overlay_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    template_path = tmp_path / "template.pdf"
+    template_path.write_bytes(b"template")
+    output_path = tmp_path / "out.pdf"
+    captured: dict[str, int] = {"added_pages": 0, "writes": 0}
+
+    class FakePage:
+        mediabox = SimpleNamespace(width=595, height=842)
+
+        def __init__(self, text: str = "") -> None:
+            self.text = text
+
+        def extract_text(self) -> str:
+            return self.text
+
+        def merge_page(self, other: object) -> None:
+            self.other = other
+
+    class FakeReader:
+        def __init__(self, path: str) -> None:
+            if path.endswith(".overlay.pdf"):
+                self.pages = [FakePage("M. R.\nEngineer"), FakePage("M. R.\nEngineer")]
+            else:
+                self.pages = [FakePage()]
+
+    class FakeWriter:
+        def add_page(self, page: object) -> None:
+            captured["added_pages"] += 1
+
+        def write(self, file_obj: object) -> None:
+            captured["writes"] += 1
+            file_obj.write(b"%PDF fake anonymized cv")
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=FakeReader, PdfWriter=FakeWriter))
+    monkeypatch.setattr(
+        cv_pdf_rendering,
+        "_write_text_overlay",
+        lambda text, overlay_path, width, height: overlay_path.write_bytes(b"overlay"),
+    )
+
+    cv_pdf_rendering.render_anonymized_cv_pdf("M. R.\nEngineer", output_path, template_path=template_path)
+
+    assert captured["added_pages"] == 1
+    assert captured["writes"] == 1
+
+
+def test_render_anonymized_cv_pdf_preserves_distinct_overlay_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    template_path = tmp_path / "template.pdf"
+    template_path.write_bytes(b"template")
+    output_path = tmp_path / "out.pdf"
+    captured: dict[str, int] = {"added_pages": 0}
+
+    class FakePage:
+        mediabox = SimpleNamespace(width=595, height=842)
+
+        def __init__(self, text: str = "") -> None:
+            self.text = text
+
+        def extract_text(self) -> str:
+            return self.text
+
+        def merge_page(self, other: object) -> None:
+            self.other = other
+
+    class FakeReader:
+        def __init__(self, path: str) -> None:
+            if path.endswith(".overlay.pdf"):
+                self.pages = [FakePage("Experience"), FakePage("Education")]
+            else:
+                self.pages = [FakePage()]
+
+    class FakeWriter:
+        def add_page(self, page: object) -> None:
+            captured["added_pages"] += 1
+
+        def write(self, file_obj: object) -> None:
+            file_obj.write(b"%PDF fake anonymized cv")
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=FakeReader, PdfWriter=FakeWriter))
+    monkeypatch.setattr(
+        cv_pdf_rendering,
+        "_write_text_overlay",
+        lambda text, overlay_path, width, height: overlay_path.write_bytes(b"overlay"),
+    )
+
+    cv_pdf_rendering.render_anonymized_cv_pdf("Experience\nEducation", output_path, template_path=template_path)
+
+    assert captured["added_pages"] == 2
+
+
 def test_anonymized_cv_endpoint_returns_pdf_and_deletes_temp_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     from starlette.applications import Starlette
     from starlette.testclient import TestClient
