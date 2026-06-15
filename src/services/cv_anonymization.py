@@ -4,21 +4,36 @@ from fastmcp.exceptions import ToolError
 
 from clients.ollama import chat_with_ollama
 
-CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize CV content for PDF export.
+CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize and format CV content for PDF export.
 
 Privacy rules:
+- Keep the candidate name.
 - Remove phone numbers.
 - Remove email addresses.
-- Remove street names and house numbers.
-- Remove the candidate's first name and surname entirely; do not replace names with initials or placeholders.
+- Remove street addresses.
+- Remove street names.
+- Remove house numbers.
+- Remove postal codes.
 - Keep only the city from any address, for example "Via Roma 10, 6900 Lugano, Switzerland" becomes "Lugano".
-- Preserve professional experience, education, skills, certifications, languages, projects, technical competencies, and professional summary.
-- Remove or transform only personally identifiable information.
+- Preserve professional experience, education, skills, certifications, languages, projects, technical competencies, hobbies, and professional summary when present.
+- Remove or transform only personally identifiable information other than the candidate name.
+
+Formatting rules:
+- Return the anonymized CV using exactly these sections and this order:
+  1. Anagraphical data
+  2. Experience
+  3. Education
+  4. Skills
+  5. Certifications
+  6. Hobby
+- Section titles must be bold, for example **Anagraphical data**.
+- Use round bullet points for lists.
+- If a section has no supported content in the CV, include the bold section title and write a round bullet point with "Not specified".
 
 Output rules:
-- Return only the anonymized CV content.
+- Return only the formatted anonymized CV content.
 - Do not start with an introductory sentence such as "Here is the anonymized CV content for PDF export:".
-- Do not add commentary, explanations, notes, markdown, or extra text.
+- Do not add introductions, explanations, comments, notes, markdown fences, or extra text.
 
 CV content:
 {cv_text}

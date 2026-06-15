@@ -49,18 +49,45 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
 
     async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
         captured["prompt"] = prompt
-        return "Lugano\nSenior Developer"
+        return (
+            "**Anagraphical data**\n"
+            "• Gabriele Di Somma\n"
+            "• Lugano\n"
+            "**Experience**\n"
+            "• Senior Developer"
+        )
 
     monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
 
-    result = asyncio.run(cv_anonymization.anonymize_cv_text("Gabriele Di Somma\ngabriele@example.com\nVia Roma 10, Lugano"))
+    result = asyncio.run(
+        cv_anonymization.anonymize_cv_text(
+            "Gabriele Di Somma\ngabriele@example.com\nVia Roma 10, Lugano"
+        )
+    )
 
-    assert result == "Lugano\nSenior Developer"
+    assert result == (
+        "**Anagraphical data**\n"
+        "• Gabriele Di Somma\n"
+        "• Lugano\n"
+        "**Experience**\n"
+        "• Senior Developer"
+    )
+    assert "Keep the candidate name" in captured["prompt"]
     assert "Remove phone numbers" in captured["prompt"]
     assert "Remove email addresses" in captured["prompt"]
-    assert "Remove the candidate's first name and surname entirely" in captured["prompt"]
-    assert "do not replace names with initials or placeholders" in captured["prompt"]
-    assert "Return only the anonymized CV content" in captured["prompt"]
+    assert "Remove street addresses" in captured["prompt"]
+    assert "Remove house numbers" in captured["prompt"]
+    assert "Remove postal codes" in captured["prompt"]
+    assert "Keep only the city" in captured["prompt"]
+    assert "Anagraphical data" in captured["prompt"]
+    assert "Experience" in captured["prompt"]
+    assert "Education" in captured["prompt"]
+    assert "Skills" in captured["prompt"]
+    assert "Certifications" in captured["prompt"]
+    assert "Hobby" in captured["prompt"]
+    assert "Section titles must be bold" in captured["prompt"]
+    assert "Use round bullet points" in captured["prompt"]
+    assert "Return only the formatted anonymized CV content" in captured["prompt"]
     assert "Do not start with an introductory sentence" in captured["prompt"]
 
 
