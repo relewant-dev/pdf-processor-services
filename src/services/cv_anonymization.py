@@ -10,14 +10,15 @@ Privacy rules:
 - Remove phone numbers.
 - Remove email addresses.
 - Remove street names and house numbers.
-- Remove the candidate's first name and surname entirely; do not replace names with initials or placeholders.
+- Remove the candidate's first name and surname completely; do not leave, replace, initialize, or pseudonymize any part of the candidate name.
 - Keep only the city from any address, for example "Via Roma 10, 6900 Lugano, Switzerland" becomes "Lugano".
 - Preserve professional experience, education, skills, certifications, languages, projects, technical competencies, and professional summary.
 - Remove or transform only personally identifiable information.
 
 Output rules:
 - Return only the anonymized CV content.
-- Do not start with an introductory sentence such as "Here is the anonymized CV content for PDF export:".
+- The response must start directly with the CV content.
+- Do not include any introductory text before the CV content.
 - Do not add commentary, explanations, notes, markdown, or extra text.
 
 CV content:

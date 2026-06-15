@@ -58,10 +58,12 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert result == "Lugano\nSenior Developer"
     assert "Remove phone numbers" in captured["prompt"]
     assert "Remove email addresses" in captured["prompt"]
-    assert "Remove the candidate's first name and surname entirely" in captured["prompt"]
-    assert "do not replace names with initials or placeholders" in captured["prompt"]
+    assert "Remove the candidate's first name and surname completely" in captured["prompt"]
+    assert "do not leave, replace, initialize, or pseudonymize" in captured["prompt"]
     assert "Return only the anonymized CV content" in captured["prompt"]
-    assert "Do not start with an introductory sentence" in captured["prompt"]
+    assert "The response must start directly with the CV content" in captured["prompt"]
+    assert "Do not include any introductory text" in captured["prompt"]
+    assert "Here is the anonymized CV content for PDF export" not in captured["prompt"]
 
 
 def test_anonymize_cv_text_removes_introductory_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
