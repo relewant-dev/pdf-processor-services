@@ -10,13 +10,14 @@ Privacy rules:
 - Remove phone numbers.
 - Remove email addresses.
 - Remove street names and house numbers.
-- Replace the candidate's full name with initials only, for example "Gabriele Di Somma" becomes "G. D. S." and "Mario Rossi" becomes "M. R.".
+- Remove the candidate's first name and surname entirely; do not replace names with initials or placeholders.
 - Keep only the city from any address, for example "Via Roma 10, 6900 Lugano, Switzerland" becomes "Lugano".
 - Preserve professional experience, education, skills, certifications, languages, projects, technical competencies, and professional summary.
 - Remove or transform only personally identifiable information.
 
 Output rules:
 - Return only the anonymized CV content.
+- Do not start with an introductory sentence such as "Here is the anonymized CV content for PDF export:".
 - Do not add commentary, explanations, notes, markdown, or extra text.
 
 CV content:
@@ -32,7 +33,14 @@ async def anonymize_cv_text(cv_text: str) -> str:
     response = await chat_with_ollama(
         CV_ANONYMIZATION_PROMPT_TEMPLATE.format(cv_text=cleaned_text)
     )
-    anonymized_text = response.strip()
+    anonymized_text = _remove_introductory_sentence(response.strip())
     if not anonymized_text:
         raise ToolError("Ollama returned an empty anonymized CV response.")
+    return anonymized_text
+
+
+def _remove_introductory_sentence(anonymized_text: str) -> str:
+    intro = "Here is the anonymized CV content for PDF export:"
+    if anonymized_text.startswith(intro):
+        return anonymized_text.removeprefix(intro).lstrip()
     return anonymized_text

@@ -49,17 +49,30 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
 
     async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
         captured["prompt"] = prompt
-        return "G. D. S.\nLugano\nSenior Developer"
+        return "Lugano\nSenior Developer"
 
     monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
 
     result = asyncio.run(cv_anonymization.anonymize_cv_text("Gabriele Di Somma\ngabriele@example.com\nVia Roma 10, Lugano"))
 
-    assert result == "G. D. S.\nLugano\nSenior Developer"
+    assert result == "Lugano\nSenior Developer"
     assert "Remove phone numbers" in captured["prompt"]
     assert "Remove email addresses" in captured["prompt"]
-    assert "Replace the candidate's full name with initials only" in captured["prompt"]
+    assert "Remove the candidate's first name and surname entirely" in captured["prompt"]
+    assert "do not replace names with initials or placeholders" in captured["prompt"]
     assert "Return only the anonymized CV content" in captured["prompt"]
+    assert "Do not start with an introductory sentence" in captured["prompt"]
+
+
+def test_anonymize_cv_text_removes_introductory_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
+        return "Here is the anonymized CV content for PDF export:\nLugano\nSenior Developer"
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    result = asyncio.run(cv_anonymization.anonymize_cv_text("Gabriele Di Somma"))
+
+    assert result == "Lugano\nSenior Developer"
 
 
 def test_anonymize_cv_text_rejects_empty_ollama_response(monkeypatch: pytest.MonkeyPatch) -> None:
