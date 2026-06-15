@@ -37,20 +37,47 @@ def render_anonymized_cv_pdf(
         _write_text_overlay(cleaned_text, overlay_path, page_width, page_height)
 
         overlay_reader = PdfReader(str(overlay_path))
+        overlay_pages = _deduplicate_identical_overlay_pages(list(overlay_reader.pages))
+        if not overlay_pages:
+            raise ToolError("Generated anonymized CV overlay does not contain any pages.")
         writer = PdfWriter()
-        for overlay_page in overlay_reader.pages:
+        for overlay_page in overlay_pages:
             base_page = copy.deepcopy(template_reader.pages[0])
             base_page.merge_page(overlay_page)
             writer.add_page(base_page)
 
         with output_path.open("wb") as output_file:
             writer.write(output_file)
-        overlay_path.unlink(missing_ok=True)
         return output_path
     except ToolError:
         raise
     except Exception as exc:
         raise ToolError(f"Failed to render anonymized CV PDF: {exc}") from exc
+    finally:
+        if "overlay_path" in locals():
+            overlay_path.unlink(missing_ok=True)
+
+
+def _deduplicate_identical_overlay_pages(pages: list[object]) -> list[object]:
+    """Collapse accidental duplicate overlay pages while preserving real multipage CVs."""
+    if len(pages) <= 1:
+        return pages
+
+    fingerprints = [_page_text_fingerprint(page) for page in pages]
+    first_fingerprint = fingerprints[0]
+    if first_fingerprint and all(
+        fingerprint == first_fingerprint for fingerprint in fingerprints[1:]
+    ):
+        return [pages[0]]
+    return pages
+
+
+def _page_text_fingerprint(page: object) -> str:
+    extract_text = getattr(page, "extract_text", None)
+    if not callable(extract_text):
+        return ""
+    page_text = extract_text() or ""
+    return "\n".join(line.strip() for line in page_text.splitlines() if line.strip())
 
 
 def _write_text_overlay(
