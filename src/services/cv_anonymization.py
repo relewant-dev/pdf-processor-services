@@ -27,7 +27,7 @@ Formatting rules:
   5. Certifications
   6. Hobby
 - Section titles must be bold in the exported PDF. Mark each section title with markdown bold delimiters, for example **Anagraphical data**, so the renderer can draw real bold text without showing the delimiters.
-- Use round bullet points for lists.
+- Use only round bullet points for lists; never use square bullet points.
 - If a section has no supported content in the CV, include the bold section title and write a round bullet point with "Not specified".
 
 Output rules:

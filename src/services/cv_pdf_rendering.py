@@ -12,6 +12,9 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TEMPLATE_PATH = REPOSITORY_ROOT / "stationery" / "relewant-sa-letterhead.pdf"
 logger = logging.getLogger(__name__)
 
+ROUND_BULLET = "•"
+SQUARE_BULLETS = frozenset({"▪", "■", "□", "▫", "◾", "◼", "◻", "▣", "▢"})
+
 
 def render_anonymized_cv_pdf(
     anonymized_text: str,
@@ -141,8 +144,13 @@ def _write_text_overlay(
     pdf.setFillColor(HexColor("#222222"))
     pdf.setFont(font_name, font_size)
 
+    bullet_gap = 4
+    bullet_radius = 1.7
+
     for flow_line in _build_cv_flow_lines(text):
-        wrapped_lines = textwrap.wrap(flow_line.text, width=chars_per_line) or [flow_line.text]
+        bullet_text = _round_bullet_text(flow_line.text)
+        drawable_text = bullet_text or flow_line.text
+        wrapped_lines = textwrap.wrap(drawable_text, width=chars_per_line) or [drawable_text]
         required_height = len(wrapped_lines) * line_height
         if flow_line.starts_section:
             required_height += section_gap
@@ -154,10 +162,22 @@ def _write_text_overlay(
         elif flow_line.starts_section:
             y -= section_gap
 
-        for line in wrapped_lines:
+        for line_index, line in enumerate(wrapped_lines):
             line_font_name, drawable_line = _pdf_line_style(line, font_name, bold_font_name)
             pdf.setFont(line_font_name, font_size)
-            pdf.drawString(left_margin, y, drawable_line)
+            if bullet_text is not None:
+                text_x = left_margin + bullet_radius * 2 + bullet_gap
+                if line_index == 0:
+                    pdf.circle(
+                        left_margin + bullet_radius,
+                        y + (font_size * 0.35),
+                        bullet_radius,
+                        stroke=0,
+                        fill=1,
+                    )
+                pdf.drawString(text_x, y, drawable_line)
+            else:
+                pdf.drawString(left_margin, y, drawable_line)
             y -= line_height
     pdf.save()
 
@@ -178,6 +198,7 @@ def _build_cv_flow_lines(text: str) -> list[_CvFlowLine]:
         if not line:
             continue
 
+        line = _normalize_bullet_prefix(line)
         is_section = _is_section_heading(line)
         starts_section = bool(flow_lines) and is_section and not previous_was_section
         flow_lines.append(_CvFlowLine(line, starts_section=starts_section))
@@ -206,3 +227,20 @@ def _pdf_line_style(line: str, font_name: str, bold_font_name: str) -> tuple[str
     if stripped_line.startswith("**") and stripped_line.endswith("**") and len(stripped_line) > 4:
         return bold_font_name, stripped_line.removeprefix("**").removesuffix("**")
     return font_name, line
+
+
+def _normalize_bullet_prefix(line: str) -> str:
+    stripped_line = line.lstrip()
+    if not stripped_line:
+        return line
+    if stripped_line[0] in SQUARE_BULLETS:
+        leading_whitespace = line[: len(line) - len(stripped_line)]
+        return f"{leading_whitespace}{ROUND_BULLET}{stripped_line[1:]}"
+    return line
+
+
+def _round_bullet_text(line: str) -> str | None:
+    stripped_line = line.lstrip()
+    if not stripped_line or stripped_line[0] != ROUND_BULLET:
+        return None
+    return stripped_line[1:].strip()

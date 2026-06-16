@@ -86,7 +86,8 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert "Certifications" in captured["prompt"]
     assert "Hobby" in captured["prompt"]
     assert "Section titles must be bold in the exported PDF" in captured["prompt"]
-    assert "Use round bullet points" in captured["prompt"]
+    assert "Use only round bullet points" in captured["prompt"]
+    assert "never use square bullet points" in captured["prompt"]
     assert "Return only the formatted anonymized CV content" in captured["prompt"]
     assert "Do not start with an introductory sentence" in captured["prompt"]
 
@@ -394,6 +395,30 @@ def test_cv_flow_lines_add_spacing_only_between_sections() -> None:
         False,
         False,
     ]
+
+
+def test_cv_flow_lines_normalize_square_bullets_to_round_bullets() -> None:
+    text = (
+        "**Experience**\n"
+        "▪ Senior Developer\n"
+        "■ Platform Engineer\n"
+        "□ Team Lead"
+    )
+
+    flow_lines = cv_pdf_rendering._build_cv_flow_lines(text)
+
+    assert [line.text for line in flow_lines] == [
+        "**Experience**",
+        "• Senior Developer",
+        "• Platform Engineer",
+        "• Team Lead",
+    ]
+
+
+def test_round_bullet_text_detects_only_round_bullet_prefixes() -> None:
+    assert cv_pdf_rendering._round_bullet_text("• Senior Developer") == "Senior Developer"
+    assert cv_pdf_rendering._round_bullet_text("  • Lugano") == "Lugano"
+    assert cv_pdf_rendering._round_bullet_text("Experience") is None
 
 
 def test_write_text_overlay_single_page_does_not_duplicate_content(tmp_path: Path) -> None:
