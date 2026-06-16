@@ -64,6 +64,7 @@ else:
     from starlette.responses import HTMLResponse, JSONResponse, Response
     from starlette.routing import Route
 
+    from routers.cv_export import router as cv_export_router
     from routers.document import router as document_router
     from routers.prompt import router as prompt_router
     from services.document_upload import PdfUploadResponse
@@ -78,6 +79,47 @@ else:
                 "description": "HTTP API for frontend prompt routing and database-first PDF answers.",
             },
             "paths": {
+                "/api/cv/anonymized-pdf": {
+                    "post": {
+                        "tags": ["cv"],
+                        "summary": "Upload a CV PDF and receive an anonymized version rendered on ReleWant letterhead.",
+                        "description": "Extracts CV PDF text, asks Ollama to anonymize personally identifiable information, renders the anonymized content onto stationery/relewant-sa-letterhead.pdf, streams the generated PDF, and deletes temporary files after delivery.",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "multipart/form-data": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["file"],
+                                        "properties": {
+                                            "file": {
+                                                "type": "string",
+                                                "format": "binary",
+                                                "description": "CV PDF to anonymize and render.",
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Generated anonymized CV PDF.",
+                                "content": {
+                                    "application/pdf": {
+                                        "schema": {"type": "string", "format": "binary"}
+                                    }
+                                },
+                            },
+                            "400": {
+                                "description": "Invalid upload, extraction failure, Ollama failure, missing template, or PDF rendering failure."
+                            },
+                            "500": {
+                                "description": "Temporary file creation or file delivery failure."
+                            },
+                        },
+                    }
+                },
                 "/api/documents/pdf": {
                     "post": {
                         "tags": ["documents"],
@@ -209,6 +251,7 @@ else:
                 "service": SERVICE_NAME,
                 "routes": [
                     "POST /api/documents/pdf",
+                    "POST /api/cv/anonymized-pdf",
                     "POST /api/prompts/execute",
                 ],
                 "docs": "Open Swagger UI at /docs or fetch the OpenAPI schema at /openapi.json.",
@@ -223,6 +266,7 @@ else:
                 Route("/docs", swagger_docs, methods=["GET"]),
                 Route("/openapi.json", openapi_schema, methods=["GET"]),
                 *document_router.routes,
+                *cv_export_router.routes,
                 *prompt_router.routes,
             ],
         )
