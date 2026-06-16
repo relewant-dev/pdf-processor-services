@@ -350,3 +350,109 @@ def test_anonymized_cv_endpoint_returns_pdf_and_deletes_temp_dir(monkeypatch: py
     assert captured["text"] == "Raw CV"
     assert captured["anonymized"] == "Anonymized CV"
     assert not captured["temp_dir"].exists()
+
+
+def test_cv_flow_lines_add_spacing_only_between_sections() -> None:
+    text = (
+        "**Experience**\n"
+        "\n"
+        "• Senior Developer\n"
+        "\n"
+        "• Platform Engineer\n"
+        "\n"
+        "**Skills**\n"
+        "\n"
+        "• Python\n"
+        "• FastMCP\n"
+        "\n"
+        "**Certifications**\n"
+        "• Cloud Practitioner — 2024 — Provider\n"
+        "• Built secure services"
+    )
+
+    flow_lines = cv_pdf_rendering._build_cv_flow_lines(text)
+
+    assert [line.text for line in flow_lines] == [
+        "**Experience**",
+        "• Senior Developer",
+        "• Platform Engineer",
+        "**Skills**",
+        "• Python",
+        "• FastMCP",
+        "**Certifications**",
+        "• Cloud Practitioner — 2024 — Provider",
+        "• Built secure services",
+    ]
+    assert [line.starts_section for line in flow_lines] == [
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        True,
+        False,
+        False,
+    ]
+
+
+def test_write_text_overlay_single_page_does_not_duplicate_content(tmp_path: Path) -> None:
+    from pypdf import PdfReader
+
+    overlay_path = tmp_path / "single-page-overlay.pdf"
+    text = (
+        "**Anagraphical data**\n"
+        "• Candidate\n"
+        "**Experience**\n"
+        "• Developer\n"
+        "**Education**\n"
+        "• University\n"
+        "**Skills**\n"
+        "• Python\n"
+        "• PDF rendering\n"
+        "**Certifications**\n"
+        "• Cloud Practitioner — 2024 — Example Provider\n"
+        "• Validated cloud fundamentals\n"
+        "**Hobby**\n"
+        "• Reading"
+    )
+
+    cv_pdf_rendering._write_text_overlay(text, overlay_path, 595, 842)
+
+    reader = PdfReader(str(overlay_path))
+    extracted_pages = [page.extract_text() for page in reader.pages]
+    full_text = "\n".join(extracted_pages)
+    assert len(extracted_pages) == 1
+    assert full_text.count("Skills") == 1
+    assert full_text.count("Certifications") == 1
+    assert full_text.index("Skills") < full_text.index("Certifications")
+    assert full_text.count("Cloud Practitioner") == 1
+
+
+def test_write_text_overlay_multipage_continues_instead_of_repeating_page_one(tmp_path: Path) -> None:
+    from pypdf import PdfReader
+
+    overlay_path = tmp_path / "multipage-overlay.pdf"
+    experience_items = "\n".join(f"• Experience item {index}" for index in range(1, 80))
+    text = (
+        "**Experience**\n"
+        f"{experience_items}\n"
+        "**Skills**\n"
+        "• Python\n"
+        "**Certifications**\n"
+        "• Cloud Practitioner — 2024 — Example Provider\n"
+        "• Validated cloud fundamentals"
+    )
+
+    cv_pdf_rendering._write_text_overlay(text, overlay_path, 595, 842)
+
+    reader = PdfReader(str(overlay_path))
+    extracted_pages = [page.extract_text() for page in reader.pages]
+    assert len(extracted_pages) > 1
+    assert extracted_pages[0] != extracted_pages[1]
+    combined_text = "\n".join(extracted_pages)
+    assert combined_text.splitlines().count("Experience") == 1
+    assert combined_text.count("Experience item 79") == 1
+    assert combined_text.count("Skills") == 1
+    assert combined_text.count("Certifications") == 1
+    assert combined_text.index("Skills") < combined_text.index("Certifications")

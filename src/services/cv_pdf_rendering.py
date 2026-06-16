@@ -132,6 +132,7 @@ def _write_text_overlay(
     bold_font_name = "Helvetica-Bold"
     font_size = 10
     line_height = 14
+    section_gap = 8
     chars_per_line = max(
         40, int((page_width - left_margin - right_margin) / (font_size * 0.52))
     )
@@ -140,19 +141,64 @@ def _write_text_overlay(
     pdf.setFillColor(HexColor("#222222"))
     pdf.setFont(font_name, font_size)
 
-    for paragraph in text.splitlines():
-        wrapped_lines = textwrap.wrap(paragraph, width=chars_per_line) if paragraph.strip() else [""]
+    for flow_line in _build_cv_flow_lines(text):
+        wrapped_lines = textwrap.wrap(flow_line.text, width=chars_per_line) or [flow_line.text]
+        required_height = len(wrapped_lines) * line_height
+        if flow_line.starts_section:
+            required_height += section_gap
+        if y - required_height < bottom_margin:
+            pdf.showPage()
+            pdf.setFillColor(HexColor("#222222"))
+            pdf.setFont(font_name, font_size)
+            y = page_height - top_margin
+        elif flow_line.starts_section:
+            y -= section_gap
+
         for line in wrapped_lines:
-            if y <= bottom_margin:
-                pdf.showPage()
-                pdf.setFillColor(HexColor("#222222"))
-                pdf.setFont(font_name, font_size)
-                y = page_height - top_margin
             line_font_name, drawable_line = _pdf_line_style(line, font_name, bold_font_name)
             pdf.setFont(line_font_name, font_size)
             pdf.drawString(left_margin, y, drawable_line)
             y -= line_height
     pdf.save()
+
+
+class _CvFlowLine:
+    def __init__(self, text: str, starts_section: bool = False) -> None:
+        self.text = text
+        self.starts_section = starts_section
+
+
+def _build_cv_flow_lines(text: str) -> list[_CvFlowLine]:
+    """Build drawable CV lines with spacing only before distinct sections."""
+    flow_lines: list[_CvFlowLine] = []
+    previous_was_section = False
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        is_section = _is_section_heading(line)
+        starts_section = bool(flow_lines) and is_section and not previous_was_section
+        flow_lines.append(_CvFlowLine(line, starts_section=starts_section))
+        previous_was_section = is_section
+
+    return flow_lines
+
+
+def _is_section_heading(line: str) -> bool:
+    stripped_line = line.strip()
+    if stripped_line.startswith("**") and stripped_line.endswith("**") and len(stripped_line) > 4:
+        return True
+    normalized = stripped_line.rstrip(":").lower()
+    return normalized in {
+        "anagraphical data",
+        "experience",
+        "education",
+        "skills",
+        "certifications",
+        "hobby",
+    }
 
 
 def _pdf_line_style(line: str, font_name: str, bold_font_name: str) -> tuple[str, str]:
