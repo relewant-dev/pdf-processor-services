@@ -227,19 +227,30 @@ pytest -q
 ```
 
 
-## Docker Compose (Qdrant storage path from `.env`)
+## Docker Compose
 
-A Docker Compose file is included at the repository root and reads the Qdrant host storage path from `.env` using `QDRANT_STORAGE_PATH`.
+A Docker Compose file is included at the repository root for the Smart IDE stack:
+
+- `frontend`: runs the published frontend image `ghcr.io/my-org/my-app:latest` and points common frontend API variables at `http://backend:8000`, the backend service name on the Compose network.
+- `backend`: builds this repository's `Dockerfile`, publishes port `8000`, loads `.env`, connects to Qdrant at `http://qdrant:6333`, and reaches a host-running Ollama instance through `http://host.docker.internal:11434` by default.
+- `qdrant`: stores vectors under the host path configured by `QDRANT_STORAGE_PATH`.
 
 Current `.env` example:
 
 ```bash
 QDRANT_STORAGE_PATH=./qdrant_storage
+OLLAMA_MODEL=qwen3-vl:4b
 ```
 
-Start Qdrant with:
+Start the full stack with:
 
 ```bash
-docker compose up -d qdrant
+docker compose up -d
+```
+
+For backend-only local API work, start just its dependencies and service with:
+
+```bash
+docker compose up -d qdrant backend
 ```
 
