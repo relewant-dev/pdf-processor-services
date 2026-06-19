@@ -100,7 +100,7 @@ Document-processing blueprints include a `cv-reader-agent` for reading CVs, resu
 - `candidate-profile-extraction`
 - `experience-skills-normalization`
 
-The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions. Persisted candidate payloads support the `language` field and the `certifications` field alongside JSON payloads for `competences`, `previous_works`, and `education`.
+The CV reader agent extracts evidence-backed candidate facts, timelines, education, certifications, projects, skills, and review warnings from supplied document text while protecting PII and avoiding unsupported hiring decisions. Persisted candidate payloads support the `languages` field as a list of values and the `certifications` field alongside JSON payloads for `competences`, `previous_works`, and `education`.
 
 ## Rotative logs for MCP tools
 
@@ -205,7 +205,7 @@ Successful responses contain only the answer as `{"response":"result based on th
 
 Expected PDF workflow: upload PDF → detect document type → check the matching database collection → if the record exists, retrieve it and answer from database fields only → if the record is missing, extract structured data once with Ollama, save it, retrieve the saved record, and answer from database fields only. CVs use the `candidates` collection; insurance documents use the `insurances` collection. The removed legacy workflow no longer asks Ollama to answer from PDF text before reprocessing the same PDF for extraction.
 
-Candidate records support `id`, `first_name`, `last_name`, `email`, `phone`, `seniority`, `city`, `country`, `address`, `competences`, `previous_works`, `education`, `current_job_title`, `current_company`, `availability_date`, `notes`, `language`, `certifications`, `created_at`, and `updated_at`. Insurance records support `id`, `candidate_id`, `policy_number`, `insurance_provider`, `insurance_type`, `policy_holder`, `coverage_details`, `start_date`, `end_date`, `premium_amount`, `currency`, `beneficiary`, `created_at`, and `updated_at`. The service also stores operational `document_hash` values to detect duplicates and uses `raw_text` only for indexing/storage, not for answer prompts.
+Candidate records support `id`, `first_name`, `last_name`, `email`, `phone`, `seniority`, `city`, `country`, `address`, `competences`, `previous_works`, `education`, `current_job_title`, `current_company`, `availability_date`, `notes`, `languages`, `certifications`, `created_at`, and `updated_at`. Insurance records support `id`, `candidate_id`, `policy_number`, `insurance_provider`, `insurance_type`, `policy_holder`, `coverage_details`, `start_date`, `end_date`, `premium_amount`, `currency`, `beneficiary`, `created_at`, and `updated_at`. The service also stores operational `document_hash` values to detect duplicates; raw PDF text is not persisted in Qdrant payloads or answer prompts.
 
 ### POST `/api/prompts/execute`
 
