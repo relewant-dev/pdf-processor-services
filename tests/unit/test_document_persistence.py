@@ -60,7 +60,7 @@ def test_candidate_schema_contains_required_table_fields() -> None:
         "current_company",
         "availability_date",
         "notes",
-        "language",
+        "languages",
         "certifications",
         "created_at",
         "updated_at",
@@ -104,7 +104,7 @@ def test_build_metadata_extraction_prompt_contains_strict_schema_instructions() 
     assert "The document may be written in any language." in prompt
     assert '"first_name"' in prompt
     assert '"previous_works"' in prompt
-    assert '"language"' in prompt
+    assert '"languages"' in prompt
     assert '"certifications"' in prompt
     assert "Jane Doe" in prompt
 
@@ -165,7 +165,7 @@ def test_extract_payload_with_ollama_uses_candidate_schema_format_and_service_me
                 "current_company": "Acme",
                 "availability_date": None,
                 "notes": None,
-                "language": ["Italiano"],
+                "languages": ["Italiano"],
                 "certifications": [],
                 "created_at": None,
                 "updated_at": None,
@@ -283,7 +283,7 @@ def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None
         "competences": {"technical": ["rust", "python"]},
         "education": [{"degree": "MSc Computer Science"}],
         "certifications": ["Kubernetes Administrator"],
-        "language": ["English", "French"],
+        "languages": ["English", "French"],
         "current_job_title": "Principal Engineer",
         "current_company": "Acme",
         "raw_text": "Candidate profile",
@@ -299,7 +299,7 @@ def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None
     assert metadata["competences"] == {"technical": ["rust", "python"]}
     assert metadata["education"] == [{"degree": "MSc Computer Science"}]
     assert metadata["certifications"] == ["Kubernetes Administrator"]
-    assert metadata["language"] == ["English", "French"]
+    assert metadata["languages"] == ["English", "French"]
 
 
 def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> None:
@@ -323,7 +323,7 @@ def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> Non
     assert metadata["current_company"] is None
     assert metadata["availability_date"] is None
     assert metadata["notes"] is None
-    assert metadata["language"] is None
+    assert metadata["languages"] is None
     assert metadata["certifications"] == []
 
 
@@ -391,7 +391,7 @@ def test_database_first_workflow_uses_existing_candidate_without_extraction(
         "first_name": "Ada",
         "last_name": "Lovelace",
         "certifications": ["Math"],
-        "language": ["English"],
+        "languages": ["English"],
     }
 
     async def fake_infer(document_text: str, question: str) -> str:
@@ -628,13 +628,13 @@ def test_candidate_payload_normalizes_aliases_without_duplicate_root_keys() -> N
         {"company": "Acme", "title": "Machine Learning Engineer"}
     ]
     assert payload["competences"] == {"technical": ["Python", "Qdrant"]}
-    assert payload["language"] == ["English", "Italian"]
+    assert payload["languages"] == ["English", "Italian"]
     assert payload["current_company"] == "Acme"
     assert payload["current_job_title"] == "Senior Machine Learning Engineer"
     assert '"education"' not in payload
     assert "work_experience" not in payload
     assert "competencies" not in payload
-    assert "languages" not in payload
+    assert "language" not in payload
     assert "company" not in payload
     assert "job_title" not in payload
     assert payload["raw_extraction"]['"education"'] == [
@@ -778,3 +778,114 @@ def test_ensure_qdrant_collections_creates_dummy_vector_collections(
             {"vectors": {"size": 1, "distance": "Cosine"}},
         ),
     ]
+
+
+def test_cv_workflow_saves_ollama_extracted_canonical_candidate_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_cv_text = (
+        "Alex Morgan\n"
+        "Milan, Italy | alex@example.com\n"
+        "Professional background\n"
+        "Senior Data Engineer at Relewant from 2021 to present.\n"
+        "Earlier Software Engineer at Example Labs from 2018 to 2021.\n"
+        "Academic background\n"
+        "MSc Computer Science, Politecnico di Milano, 2018.\n"
+        "Skills: Python, Qdrant, ETL. Languages: English, Italian."
+    )
+    calls: dict[str, object] = {"get_count": 0}
+
+    async def fake_get_document_by_hash(collection_name: str, document_hash: str):
+        calls["get_count"] = int(calls["get_count"]) + 1
+        if calls["get_count"] < 3:
+            return None
+        return calls["stored_payload"]
+
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        if "Classify the uploaded document" in prompt:
+            return '{"document_type":"cv"}'
+        if "information extraction system" in prompt:
+            calls["extraction_prompt"] = prompt
+            return json.dumps(
+                {
+                    "id": None,
+                    "first_name": "Alex",
+                    "last_name": "Morgan",
+                    "email": "alex@example.com",
+                    "phone": None,
+                    "seniority": "senior",
+                    "city": "Milan",
+                    "country": "Italy",
+                    "address": None,
+                    "current_job_title": "Senior Data Engineer",
+                    "current_company": "Relewant",
+                    "education": [
+                        {
+                            "degree": "MSc Computer Science",
+                            "institution": "Politecnico di Milano",
+                            "year": "2018",
+                        }
+                    ],
+                    "previous_works": [
+                        {
+                            "title": "Senior Data Engineer",
+                            "company": "Relewant",
+                            "start_date": "2021",
+                            "end_date": "present",
+                        },
+                        {
+                            "title": "Software Engineer",
+                            "company": "Example Labs",
+                            "start_date": "2018",
+                            "end_date": "2021",
+                        },
+                    ],
+                    "competences": ["Python", "Qdrant", "ETL"],
+                    "languages": ["English", "Italian"],
+                    "certifications": [],
+                    "notes": None,
+                    "availability_date": None,
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            )
+        calls["answer_prompt"] = prompt
+        return "Alex Morgan was saved."
+
+    async def fake_upsert_records(collection_name: str, records: list[object]) -> None:
+        calls["collection_name"] = collection_name
+        calls["stored_payload"] = records[0].payload
+
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(document_persistence, "_upsert_records", fake_upsert_records)
+    monkeypatch.setattr(
+        document_persistence,
+        "log_performance_event",
+        lambda event, **fields: None,
+    )
+
+    result = asyncio.run(
+        answer_document_prompt_from_database(sample_cv_text, "Summarize this CV")
+    )
+
+    payload = calls["stored_payload"]
+    assert result.document_type == "cv"
+    assert calls["collection_name"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    assert payload["education"]
+    assert payload["previous_works"]
+    assert payload["education"][0]["degree"] == "MSc Computer Science"
+    assert payload["previous_works"][0]["company"] == "Relewant"
+    assert payload["current_job_title"] == "Senior Data Engineer"
+    assert payload["current_company"] == "Relewant"
+    assert payload["competences"] == ["Python", "Qdrant", "ETL"]
+    assert payload["languages"] == ["English", "Italian"]
+    assert "language" not in payload
+    assert "work_experience" not in payload
+    assert "education_history" not in payload
+    assert "raw_extraction" in payload
+    assert "education and work experience" in calls["extraction_prompt"].lower()
