@@ -778,3 +778,34 @@ def test_ensure_qdrant_collections_creates_dummy_vector_collections(
             {"vectors": {"size": 1, "distance": "Cosine"}},
         ),
     ]
+
+def test_candidate_payload_normalizes_common_job_and_education_aliases() -> None:
+    records = build_vector_db_records(
+        {
+            "id": "candidate-cv-alias-1",
+            "first_name": "Lina",
+            "academic_background": [
+                {"degree": "BSc Information Systems", "institution": "Example University"}
+            ],
+            "jobs": [
+                {"company": "Globex", "title": "Data Engineer", "start_date": "2021"}
+            ],
+            "current_employer": "Globex",
+            "current_role": "Senior Data Engineer",
+            "raw_text": "Education and job history from an uploaded CV",
+        },
+        metadata_kind="candidate",
+    )
+
+    payload = records[0].payload
+
+    assert payload["education"] == [
+        {"degree": "BSc Information Systems", "institution": "Example University"}
+    ]
+    assert payload["previous_works"] == [
+        {"company": "Globex", "title": "Data Engineer", "start_date": "2021"}
+    ]
+    assert payload["current_company"] == "Globex"
+    assert payload["current_job_title"] == "Senior Data Engineer"
+    assert "academic_background" not in payload
+    assert "jobs" not in payload

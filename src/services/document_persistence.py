@@ -436,6 +436,11 @@ def _build_metadata_extraction_prompt(
         "For object fields, return null when the document does not explicitly "
         "support the object; otherwise include only explicitly supported nested "
         "values.\n"
+        "For candidate CVs, save education entries in the education field and "
+        "save job, employment, role, and work-history entries in previous_works; "
+        "also populate current_job_title and current_company when the current or "
+        "most recent job is explicit. Do not leave education or job fields empty "
+        "when the CV text explicitly contains those sections. "
         "Normalize explicitly stated dates to YYYY-MM-DD when possible; otherwise "
         "preserve the explicit date text. Normalize explicitly stated money amounts "
         "as numbers and currencies as ISO 4217 codes when possible.\n"
@@ -671,20 +676,40 @@ def _normalize_metadata_aliases(
     schema_fields = set(CandidateVectorMetadata.model_fields)
     alias_map = {
         "competencies": "competences",
+        "technical_skills": "competences",
         "skills": "competences",
         "previous_work": "previous_works",
         "work_experience": "previous_works",
+        "work_experiences": "previous_works",
         "experience": "previous_works",
+        "experiences": "previous_works",
+        "professional_experience": "previous_works",
+        "professional_experiences": "previous_works",
+        "employment": "previous_works",
         "employment_history": "previous_works",
+        "work_history": "previous_works",
+        "career_history": "previous_works",
+        "roles": "previous_works",
+        "positions": "previous_works",
         "educations": "education",
         "education_history": "education",
+        "educational_background": "education",
+        "academic_background": "education",
+        "academic_history": "education",
+        "qualifications": "education",
         "studies": "education",
         "languages": "language",
         "certificates": "certifications",
         "company": "current_company",
+        "employer": "current_company",
+        "current_employer": "current_company",
         "job_title": "current_job_title",
         "title": "current_job_title",
+        "role": "current_job_title",
+        "current_role": "current_job_title",
+        "current_position": "current_job_title",
     }
+    value_sensitive_job_aliases = {"job", "jobs"}
 
     normalized: dict[str, Any] = {}
     raw_extraction: dict[str, Any] = {}
@@ -694,7 +719,11 @@ def _normalize_metadata_aliases(
 
     for raw_key, value in payload.items():
         key = _canonical_payload_key(raw_key)
-        target_key = alias_map.get(key, key)
+        target_key = (
+            _candidate_job_alias_target(value)
+            if key in value_sensitive_job_aliases
+            else alias_map.get(key, key)
+        )
         if target_key in schema_fields and target_key != "raw_extraction":
             if target_key != key or str(raw_key) != key:
                 raw_extraction[str(raw_key)] = value
@@ -714,6 +743,12 @@ def _normalize_metadata_aliases(
 
 def _canonical_payload_key(key: Any) -> str:
     return str(key).strip().strip('"').strip("'")
+
+
+def _candidate_job_alias_target(value: Any) -> str:
+    if isinstance(value, list | dict):
+        return "previous_works"
+    return "current_job_title"
 
 
 def _is_missing_candidate_value(value: Any) -> bool:
