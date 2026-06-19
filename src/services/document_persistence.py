@@ -58,7 +58,6 @@ class CandidateVectorMetadata(BaseModel):
     languages: list[str] = Field(default_factory=list)
     certifications: list[str] | list[dict[str, Any]] = Field(default_factory=list)
     document_hash: str | None = None
-    raw_extraction: dict[str, Any] | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -470,7 +469,7 @@ def _build_metadata_extraction_prompt(
         "Normalize explicitly stated dates to YYYY-MM-DD when possible; otherwise "
         "preserve the explicit date text. Normalize explicitly stated money amounts "
         "as numbers and currencies as ISO 4217 codes when possible.\n"
-        "Service-owned fields (id, document_hash, raw_extraction, created_at, updated_at) "
+        "Service-owned fields (id, document_hash, created_at, updated_at) "
         "should be null unless explicitly present in the document; the service may "
         "overwrite them after extraction.\n"
         + (_candidate_extraction_instructions() if metadata_kind == "candidate" else "")
@@ -556,8 +555,6 @@ def _with_service_metadata(
     extracted_payload: dict[str, Any], document_text: str, metadata_kind: str
 ) -> dict[str, Any]:
     payload = dict(extracted_payload)
-    if metadata_kind == "candidate":
-        payload["raw_extraction"] = dict(extracted_payload)
     document_hash = _document_hash(document_text)
     timestamp = _utc_timestamp()
     payload["id"] = _service_document_id(payload.get("id"), document_hash, metadata_kind)
@@ -694,7 +691,7 @@ def _embedding_text_from_payload(metadata: dict[str, Any]) -> str:
 
 
 def _without_collection_excluded_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    collection_excluded_keys = {"raw_text"}
+    collection_excluded_keys = {"raw_text", "raw_extraction"}
     return {
         key: value for key, value in payload.items() if key not in collection_excluded_keys
     }
@@ -750,30 +747,18 @@ def _normalize_metadata_aliases(
     }
 
     normalized: dict[str, Any] = {}
-    raw_extraction: dict[str, Any] = {}
-    existing_raw_extraction = payload.get("raw_extraction")
-    if isinstance(existing_raw_extraction, dict):
-        raw_extraction.update(existing_raw_extraction)
 
     for raw_key, value in payload.items():
         key = _canonical_payload_key(raw_key)
-        if key == "raw_text":
+        if key in {"raw_text", "raw_extraction"}:
             continue
         target_key = alias_map.get(key, key)
-        if target_key in schema_fields and target_key != "raw_extraction":
-            if target_key != key or str(raw_key) != key:
-                raw_extraction[str(raw_key)] = value
+        if target_key in schema_fields:
             if target_key not in normalized or _is_missing_candidate_value(
                 normalized[target_key]
             ):
                 normalized[target_key] = value
-            continue
-        if key == "raw_extraction":
-            continue
-        raw_extraction[str(raw_key)] = value
 
-    if raw_extraction:
-        normalized["raw_extraction"] = raw_extraction
     return normalized
 
 
