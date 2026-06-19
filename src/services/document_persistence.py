@@ -55,7 +55,7 @@ class CandidateVectorMetadata(BaseModel):
     current_company: str | None = None
     availability_date: str | None = None
     notes: str | None = None
-    language: str | list[str] | None = None
+    languages: str | list[str] | None = None
     certifications: list[str] | list[dict[str, Any]] = Field(default_factory=list)
     document_hash: str | None = None
     raw_text: str | None = None
@@ -277,9 +277,26 @@ async def extract_payload_with_ollama(
     raw_result = await chat_with_ollama(
         prompt, response_format=schema.model_json_schema()
     )
+    logger.info(
+        "Ollama extraction completed metadata_kind=%s extracted_pdf_text_length=%s raw_response=%s",
+        metadata_kind,
+        len(document_text),
+        raw_result,
+    )
     extracted_payload = _parse_json_object(raw_result)
+    logger.info(
+        "Ollama extraction parsed metadata_kind=%s parsed_candidate_object=%s",
+        metadata_kind,
+        _safe_log_json(extracted_payload) if metadata_kind == "candidate" else None,
+    )
     payload = _with_service_metadata(extracted_payload, document_text, metadata_kind)
-    return build_vector_db_metadata(payload, metadata_kind=metadata_kind)
+    metadata = build_vector_db_metadata(payload, metadata_kind=metadata_kind)
+    logger.info(
+        "Ollama extraction canonicalized metadata_kind=%s parsed_candidate_object=%s",
+        metadata_kind,
+        _safe_log_json(metadata) if metadata_kind == "candidate" else None,
+    )
+    return metadata
 
 
 async def build_answer_from_database_record(
@@ -439,13 +456,33 @@ def _build_metadata_extraction_prompt(
         "Normalize explicitly stated dates to YYYY-MM-DD when possible; otherwise "
         "preserve the explicit date text. Normalize explicitly stated money amounts "
         "as numbers and currencies as ISO 4217 codes when possible.\n"
-        "Service-owned fields (id, document_hash, raw_text, created_at, updated_at) "
+        "Service-owned fields (id, document_hash, raw_text, raw_extraction, created_at, updated_at) "
         "should be null unless explicitly present in the document; the service may "
         "overwrite them after extraction.\n"
-        f"Metadata kind: {metadata_kind}.\n"
+        + (_candidate_extraction_instructions() if metadata_kind == "candidate" else "")
+        + f"Metadata kind: {metadata_kind}.\n"
         f"Required top-level fields to populate: {field_names}.\n\n"
         f"JSON Schema:\n{json_schema}\n\n"
         f"Document text:\n{document_text}"
+    )
+
+
+def _candidate_extraction_instructions() -> str:
+    return (
+        "Candidate extraction requirements:\n"
+        "- Return one JSON object using these canonical candidate fields: first_name, "
+        "last_name, email, phone, seniority, city, country, address, "
+        "current_job_title, current_company, education, previous_works, "
+        "competences, languages, certifications, notes.\n"
+        "- Extract education and work experience even when headings or section titles "
+        "vary, are omitted, or are written in another language.\n"
+        "- Preserve every distinct education entry as an object in education.\n"
+        "- Preserve every distinct job, role, internship, contract, or work "
+        "experience entry as an object in previous_works.\n"
+        "- Put skills, technologies, and professional capabilities in competences.\n"
+        "- Put spoken/written languages in languages, not in notes.\n"
+        "- Use null only when information is truly absent, and do not invent "
+        "unstated values.\n"
     )
 
 
@@ -472,7 +509,11 @@ def _parse_json_object(raw_result: str) -> dict[str, Any]:
     try:
         parsed = json.loads(stripped_result)
     except json.JSONDecodeError:
-        parsed = _parse_embedded_json_object(stripped_result)
+        try:
+            parsed = _parse_embedded_json_object(stripped_result)
+        except VectorDbMetadataError:
+            logger.error("Ollama metadata response was not valid JSON raw_response=%s", raw_result)
+            raise
 
     if not isinstance(parsed, dict):
         raise VectorDbMetadataError("Ollama metadata response must be a JSON object.")
@@ -501,6 +542,8 @@ def _with_service_metadata(
     extracted_payload: dict[str, Any], document_text: str, metadata_kind: str
 ) -> dict[str, Any]:
     payload = dict(extracted_payload)
+    if metadata_kind == "candidate":
+        payload["raw_extraction"] = dict(extracted_payload)
     document_hash = _document_hash(document_text)
     timestamp = _utc_timestamp()
     payload["id"] = _service_document_id(payload.get("id"), document_hash, metadata_kind)
@@ -679,7 +722,7 @@ def _normalize_metadata_aliases(
         "educations": "education",
         "education_history": "education",
         "studies": "education",
-        "languages": "language",
+        "language": "languages",
         "certificates": "certifications",
         "company": "current_company",
         "job_title": "current_job_title",
