@@ -635,10 +635,7 @@ def test_candidate_payload_normalizes_aliases_without_duplicate_root_keys() -> N
     assert "language" not in payload
     assert "company" not in payload
     assert "job_title" not in payload
-    assert payload["raw_extraction"]['"education"'] == [
-        {"degree": "MSc Artificial Intelligence"},
-        {"degree": "BSc Computer Science"},
-    ]
+    assert "raw_extraction" not in payload
 
 
 def test_database_answer_uses_canonical_candidate_education_in_api_response(
@@ -885,5 +882,5 @@ def test_cv_workflow_saves_ollama_extracted_canonical_candidate_payload(
     assert "language" not in payload
     assert "work_experience" not in payload
     assert "education_history" not in payload
-    assert "raw_extraction" in payload
+    assert "raw_extraction" not in payload
     assert "education and work experience" in calls["extraction_prompt"].lower()
