@@ -568,3 +568,128 @@ def test_build_vector_records_keeps_multipage_insurance_pdf_in_one_record(
     assert len(records) == 1
     assert records[0].payload["policy_number"] == "MULTI-1"
     assert "chunk_index" not in records[0].payload
+
+
+def test_candidate_education_alias_is_preserved_in_qdrant_payload() -> None:
+    records = build_vector_db_records(
+        {
+            "id": "candidate-alias-1",
+            "first_name": "Maria",
+            "education_history": [
+                {
+                    "degree": "MSc Computer Science",
+                    "institution": "University of Example",
+                }
+            ],
+            "raw_text": "Education: MSc Computer Science, University of Example",
+        },
+        metadata_kind="candidate",
+    )
+
+    assert records[0].payload["education"] == [
+        {
+            "degree": "MSc Computer Science",
+            "institution": "University of Example",
+        }
+    ]
+    assert records[0].vector == [1.0]
+    assert len(records[0].vector) == document_persistence.QDRANT_DUMMY_VECTOR_SIZE
+
+
+def test_persist_candidate_payload_logs_payload_vector_and_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def put(self, path: str, **kwargs: object) -> FakeResponse:
+            logged.append((path, (kwargs,)))
+            return FakeResponse()
+
+    monkeypatch.setattr(document_persistence.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        document_persistence.logger,
+        "info",
+        lambda message, *args: logged.append((message, args)),
+    )
+
+    asyncio.run(
+        persist_extracted_payload(
+            document_persistence.QDRANT_CANDIDATES_COLLECTION,
+            {
+                "id": "candidate-log-1",
+                "first_name": "Nina",
+                "studies": [{"degree": "BSc Software Engineering"}],
+                "raw_text": "Education: BSc Software Engineering",
+            },
+            metadata_kind="candidate",
+        )
+    )
+
+    upsert_log = next(
+        item for item in logged if str(item[0]).startswith("Qdrant upsert prepared")
+    )
+    assert document_persistence.QDRANT_CANDIDATES_COLLECTION in upsert_log[1]
+    assert 1 in upsert_log[1]
+    assert "BSc Software Engineering" in str(upsert_log[1])
+    assert any(path == "/collections/candidates/points" for path, _ in logged)
+
+
+def test_ensure_qdrant_collections_creates_dummy_vector_collections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[str, dict[str, object]]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int = 200) -> None:
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, path: str) -> FakeResponse:
+            return FakeResponse(status_code=404)
+
+        async def put(self, path: str, **kwargs: object) -> FakeResponse:
+            requests.append((path, kwargs["json"]))
+            return FakeResponse()
+
+    monkeypatch.setattr(document_persistence.httpx, "AsyncClient", FakeClient)
+
+    asyncio.run(document_persistence.ensure_qdrant_collections())
+
+    assert requests == [
+        (
+            "/collections/candidates",
+            {"vectors": {"size": 1, "distance": "Cosine"}},
+        ),
+        (
+            "/collections/insurances",
+            {"vectors": {"size": 1, "distance": "Cosine"}},
+        ),
+    ]
