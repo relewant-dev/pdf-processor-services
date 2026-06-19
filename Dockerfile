@@ -13,6 +13,7 @@ RUN apt-get update \
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY skills ./skills
+COPY stationery ./stationery
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install -e .
