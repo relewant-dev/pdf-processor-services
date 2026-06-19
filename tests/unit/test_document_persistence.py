@@ -183,9 +183,7 @@ def test_extract_payload_with_ollama_uses_candidate_schema_format_and_service_me
 
     assert payload["id"].startswith("candidate-")
     assert payload["document_hash"]
-    assert payload["raw_text"] == (
-        "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica"
-    )
+    assert "raw_text" not in payload
     assert payload["first_name"] == "Giulia"
     assert payload["education"] == [{"degree": "Laurea in Informatica"}]
     assert captured["response_format"] == CandidateVectorMetadata.model_json_schema()
@@ -323,7 +321,7 @@ def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> Non
     assert metadata["current_company"] is None
     assert metadata["availability_date"] is None
     assert metadata["notes"] is None
-    assert metadata["languages"] is None
+    assert metadata["languages"] == []
     assert metadata["certifications"] == []
 
 

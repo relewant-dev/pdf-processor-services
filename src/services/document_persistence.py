@@ -55,13 +55,23 @@ class CandidateVectorMetadata(BaseModel):
     current_company: str | None = None
     availability_date: str | None = None
     notes: str | None = None
-    languages: str | list[str] | None = None
+    languages: list[str] = Field(default_factory=list)
     certifications: list[str] | list[dict[str, Any]] = Field(default_factory=list)
     document_hash: str | None = None
-    raw_text: str | None = None
     raw_extraction: dict[str, Any] | None = None
     created_at: str | None = None
     updated_at: str | None = None
+
+    @field_validator(
+        "previous_works", "education", "languages", "certifications", mode="before"
+    )
+    @classmethod
+    def repeated_fields_must_be_lists(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
 
 
 class InsuranceVectorMetadata(BaseModel):
@@ -82,7 +92,6 @@ class InsuranceVectorMetadata(BaseModel):
     currency: str | None = None
     beneficiary: dict[str, Any] | None = None
     document_hash: str | None = None
-    raw_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -93,7 +102,6 @@ class GenericVectorMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str = Field(..., min_length=1)
-    raw_text: str | None = None
 
 
 class VectorDbRecord(BaseModel):
@@ -361,13 +369,18 @@ def build_vector_db_records(
     *,
     metadata_kind: str | None = None,
 ) -> list[VectorDbRecord]:
+    raw_embedding_text = extracted_payload.get("raw_text")
     normalized_payload = _normalize_metadata_aliases(
         extracted_payload, metadata_kind=metadata_kind
     )
     metadata = build_vector_db_metadata(
         normalized_payload, metadata_kind=metadata_kind
     )
-    embedding_text = _embedding_text_from_payload(metadata)
+    embedding_text = (
+        raw_embedding_text
+        if isinstance(raw_embedding_text, str) and raw_embedding_text
+        else _embedding_text_from_payload(metadata)
+    )
     chunks = (
         [embedding_text]
         if metadata_kind == "insurance"
@@ -393,6 +406,7 @@ def build_vector_db_metadata(
     normalized_payload = _normalize_metadata_aliases(
         extracted_payload, metadata_kind=metadata_kind
     )
+    normalized_payload = _without_collection_excluded_fields(normalized_payload)
     schema = _metadata_schema(metadata_kind)
     try:
         metadata_model = schema.model_validate(normalized_payload)
@@ -456,7 +470,7 @@ def _build_metadata_extraction_prompt(
         "Normalize explicitly stated dates to YYYY-MM-DD when possible; otherwise "
         "preserve the explicit date text. Normalize explicitly stated money amounts "
         "as numbers and currencies as ISO 4217 codes when possible.\n"
-        "Service-owned fields (id, document_hash, raw_text, raw_extraction, created_at, updated_at) "
+        "Service-owned fields (id, document_hash, raw_extraction, created_at, updated_at) "
         "should be null unless explicitly present in the document; the service may "
         "overwrite them after extraction.\n"
         + (_candidate_extraction_instructions() if metadata_kind == "candidate" else "")
@@ -548,7 +562,6 @@ def _with_service_metadata(
     timestamp = _utc_timestamp()
     payload["id"] = _service_document_id(payload.get("id"), document_hash, metadata_kind)
     payload["document_hash"] = document_hash
-    payload["raw_text"] = document_text
     payload["created_at"] = payload.get("created_at") or timestamp
     payload["updated_at"] = timestamp
     return payload
@@ -680,6 +693,13 @@ def _embedding_text_from_payload(metadata: dict[str, Any]) -> str:
     return " ".join(str(value) for value in metadata.values() if value is not None)
 
 
+def _without_collection_excluded_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    collection_excluded_keys = {"raw_text"}
+    return {
+        key: value for key, value in payload.items() if key not in collection_excluded_keys
+    }
+
+
 def _split_embedding_text(text: str) -> list[str]:
     if not text:
         return [""]
@@ -737,6 +757,8 @@ def _normalize_metadata_aliases(
 
     for raw_key, value in payload.items():
         key = _canonical_payload_key(raw_key)
+        if key == "raw_text":
+            continue
         target_key = alias_map.get(key, key)
         if target_key in schema_fields and target_key != "raw_extraction":
             if target_key != key or str(raw_key) != key:
