@@ -31,7 +31,7 @@ _load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 SERVICE_NAME = "smart-ide-services"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3-vl:4b")
-OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "600"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE", "smart-ide-services.log")
 PERFORMANCE_LOG_FILE = os.getenv("PERFORMANCE_LOG_FILE", "performance.log")
