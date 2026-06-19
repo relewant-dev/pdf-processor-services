@@ -37,7 +37,7 @@ class VectorDbMetadataError(ValueError):
 class CandidateVectorMetadata(BaseModel):
     """Candidate table payload used as the source of truth for CV answers."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., min_length=1)
     first_name: str | None = None
@@ -59,6 +59,7 @@ class CandidateVectorMetadata(BaseModel):
     certifications: list[str] | list[dict[str, Any]] = Field(default_factory=list)
     document_hash: str | None = None
     raw_text: str | None = None
+    raw_extraction: dict[str, Any] | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -278,8 +279,7 @@ async def extract_payload_with_ollama(
     )
     extracted_payload = _parse_json_object(raw_result)
     payload = _with_service_metadata(extracted_payload, document_text, metadata_kind)
-    build_vector_db_metadata(payload, metadata_kind=metadata_kind)
-    return payload
+    return build_vector_db_metadata(payload, metadata_kind=metadata_kind)
 
 
 async def build_answer_from_database_record(
@@ -668,14 +668,56 @@ def _normalize_metadata_aliases(
     if metadata_kind != "candidate":
         return payload
 
-    normalized = dict(payload)
-    if not normalized.get("education"):
-        for alias in ("educations", "education_history", "studies"):
-            alias_value = normalized.get(alias)
-            if alias_value:
-                normalized["education"] = alias_value
-                break
+    schema_fields = set(CandidateVectorMetadata.model_fields)
+    alias_map = {
+        "competencies": "competences",
+        "skills": "competences",
+        "previous_work": "previous_works",
+        "work_experience": "previous_works",
+        "experience": "previous_works",
+        "employment_history": "previous_works",
+        "educations": "education",
+        "education_history": "education",
+        "studies": "education",
+        "languages": "language",
+        "certificates": "certifications",
+        "company": "current_company",
+        "job_title": "current_job_title",
+        "title": "current_job_title",
+    }
+
+    normalized: dict[str, Any] = {}
+    raw_extraction: dict[str, Any] = {}
+    existing_raw_extraction = payload.get("raw_extraction")
+    if isinstance(existing_raw_extraction, dict):
+        raw_extraction.update(existing_raw_extraction)
+
+    for raw_key, value in payload.items():
+        key = _canonical_payload_key(raw_key)
+        target_key = alias_map.get(key, key)
+        if target_key in schema_fields and target_key != "raw_extraction":
+            if target_key != key or str(raw_key) != key:
+                raw_extraction[str(raw_key)] = value
+            if target_key not in normalized or _is_missing_candidate_value(
+                normalized[target_key]
+            ):
+                normalized[target_key] = value
+            continue
+        if key == "raw_extraction":
+            continue
+        raw_extraction[str(raw_key)] = value
+
+    if raw_extraction:
+        normalized["raw_extraction"] = raw_extraction
     return normalized
+
+
+def _canonical_payload_key(key: Any) -> str:
+    return str(key).strip().strip('"').strip("'")
+
+
+def _is_missing_candidate_value(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
 
 
 def _log_qdrant_upsert(collection_name: str, records: list[VectorDbRecord]) -> None:
