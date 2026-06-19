@@ -596,6 +596,91 @@ def test_candidate_education_alias_is_preserved_in_qdrant_payload() -> None:
     assert len(records[0].vector) == document_persistence.QDRANT_DUMMY_VECTOR_SIZE
 
 
+def test_candidate_payload_normalizes_aliases_without_duplicate_root_keys() -> None:
+    records = build_vector_db_records(
+        {
+            "id": "candidate-canonical-1",
+            "first_name": "Elena",
+            "education": None,
+            '"education"': [
+                {"degree": "MSc Artificial Intelligence"},
+                {"degree": "BSc Computer Science"},
+            ],
+            "work_experience": [
+                {"company": "Acme", "title": "Machine Learning Engineer"}
+            ],
+            "competencies": {"technical": ["Python", "Qdrant"]},
+            "languages": ["English", "Italian"],
+            "company": "Acme",
+            "job_title": "Senior Machine Learning Engineer",
+            "raw_text": "Sample CV with education and work experience",
+        },
+        metadata_kind="candidate",
+    )
+
+    payload = records[0].payload
+
+    assert payload["education"] == [
+        {"degree": "MSc Artificial Intelligence"},
+        {"degree": "BSc Computer Science"},
+    ]
+    assert payload["previous_works"] == [
+        {"company": "Acme", "title": "Machine Learning Engineer"}
+    ]
+    assert payload["competences"] == {"technical": ["Python", "Qdrant"]}
+    assert payload["language"] == ["English", "Italian"]
+    assert payload["current_company"] == "Acme"
+    assert payload["current_job_title"] == "Senior Machine Learning Engineer"
+    assert '"education"' not in payload
+    assert "work_experience" not in payload
+    assert "competencies" not in payload
+    assert "languages" not in payload
+    assert "company" not in payload
+    assert "job_title" not in payload
+    assert payload["raw_extraction"]['"education"'] == [
+        {"degree": "MSc Artificial Intelligence"},
+        {"degree": "BSc Computer Science"},
+    ]
+
+
+def test_database_answer_uses_canonical_candidate_education_in_api_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_record = {
+        "id": "candidate-saved-education",
+        "document_hash": document_persistence._document_hash("CV text"),
+        "first_name": "Elena",
+        "education": [{"degree": "MSc Artificial Intelligence"}],
+        "previous_works": [{"company": "Acme"}],
+    }
+
+    async def fake_get_document_by_hash(collection_name: str, document_hash: str):
+        return saved_record
+
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        assert "MSc Artificial Intelligence" in prompt
+        assert "education" in prompt
+        return "Education: MSc Artificial Intelligence"
+
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        document_persistence,
+        "log_performance_event",
+        lambda event, **fields: None,
+    )
+
+    result = asyncio.run(
+        answer_document_prompt_from_database("CV text", "What education does she have?")
+    )
+
+    assert result.response == "Education: MSc Artificial Intelligence"
+
+
 def test_persist_candidate_payload_logs_payload_vector_and_collection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
