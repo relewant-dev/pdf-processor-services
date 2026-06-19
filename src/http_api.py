@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from importlib.util import find_spec
 from typing import Any, Iterable
 
@@ -67,6 +68,8 @@ else:
     from routers.cv_export import router as cv_export_router
     from routers.document import router as document_router
     from routers.prompt import router as prompt_router
+    from logging_config import get_logger
+    from services.document_persistence import ensure_qdrant_collections
     from services.document_upload import PdfUploadResponse
     from services.prompt_router import PromptExecutionRequest, PromptExecutionResponse
 
@@ -258,9 +261,18 @@ else:
             }
         )
 
+    logger = get_logger()
+
+    @asynccontextmanager
+    async def lifespan(_: Starlette):
+        await ensure_qdrant_collections()
+        logger.info("Qdrant collections initialized for PDF processing")
+        yield
+
     def create_app() -> Starlette:
         return Starlette(
             debug=False,
+            lifespan=lifespan,
             routes=[
                 Route("/", api_hint, methods=["GET"]),
                 Route("/docs", swagger_docs, methods=["GET"]),

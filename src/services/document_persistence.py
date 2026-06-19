@@ -12,6 +12,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from clients.ollama import chat_with_ollama
+from logging_config import get_logger
 from services.performance import log_performance_event
 from config import (
     QDRANT_CANDIDATES_COLLECTION,
@@ -22,6 +23,9 @@ from config import (
 
 
 VECTOR_DB_CHUNK_SIZE = 4000
+QDRANT_DUMMY_VECTOR_SIZE = 1
+QDRANT_DUMMY_VECTOR = [1.0]
+logger = get_logger()
 DocumentDomain = Literal["cv", "insurance", "other"]
 MetadataKind = Literal["candidate", "insurance"]
 
@@ -340,8 +344,11 @@ def build_vector_db_records(
     *,
     metadata_kind: str | None = None,
 ) -> list[VectorDbRecord]:
-    metadata = build_vector_db_metadata(
+    normalized_payload = _normalize_metadata_aliases(
         extracted_payload, metadata_kind=metadata_kind
+    )
+    metadata = build_vector_db_metadata(
+        normalized_payload, metadata_kind=metadata_kind
     )
     embedding_text = _embedding_text_from_payload(metadata)
     chunks = (
@@ -366,9 +373,12 @@ def build_vector_db_metadata(
     *,
     metadata_kind: str | None = None,
 ) -> dict[str, Any]:
+    normalized_payload = _normalize_metadata_aliases(
+        extracted_payload, metadata_kind=metadata_kind
+    )
     schema = _metadata_schema(metadata_kind)
     try:
-        metadata_model = schema.model_validate(extracted_payload)
+        metadata_model = schema.model_validate(normalized_payload)
     except ValidationError as exc:
         raise VectorDbMetadataError(str(exc)) from exc
 
@@ -543,10 +553,46 @@ def _metadata_kind_for_collection(collection_name: str) -> str | None:
     return None
 
 
+async def ensure_qdrant_collections() -> None:
+    """Create required Qdrant collections for dummy-vector payload storage."""
+    for collection_name in (QDRANT_CANDIDATES_COLLECTION, QDRANT_INSURANCES_COLLECTION):
+        await _ensure_qdrant_collection(collection_name)
+
+
+async def _ensure_qdrant_collection(collection_name: str) -> None:
+    body = {
+        "vectors": {
+            "size": QDRANT_DUMMY_VECTOR_SIZE,
+            "distance": "Cosine",
+        }
+    }
+    timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
+    async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
+        existing_response = await client.get(f"/collections/{collection_name}")
+        if existing_response.status_code == 200:
+            return
+        if existing_response.status_code != 404:
+            try:
+                existing_response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise ToolError(
+                    f"Failed to inspect Qdrant collection '{collection_name}'."
+                ) from exc
+
+        response = await client.put(f"/collections/{collection_name}", json=body)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ToolError(
+                f"Failed to initialize Qdrant collection '{collection_name}'."
+            ) from exc
+
+
 async def _upsert_records(
     collection_name: str, records: list[VectorDbRecord]
 ) -> None:
     body = {"points": [record.model_dump(mode="json") for record in records]}
+    _log_qdrant_upsert(collection_name, records)
     timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
         response = await client.put(
@@ -616,8 +662,41 @@ def _metadata_for_chunk(
     return chunk_metadata
 
 
+def _normalize_metadata_aliases(
+    payload: dict[str, Any], *, metadata_kind: str | None
+) -> dict[str, Any]:
+    if metadata_kind != "candidate":
+        return payload
+
+    normalized = dict(payload)
+    if not normalized.get("education"):
+        for alias in ("educations", "education_history", "studies"):
+            alias_value = normalized.get(alias)
+            if alias_value:
+                normalized["education"] = alias_value
+                break
+    return normalized
+
+
+def _log_qdrant_upsert(collection_name: str, records: list[VectorDbRecord]) -> None:
+    for record in records:
+        logger.info(
+            "Qdrant upsert prepared collection=%s vector_length=%s structured_candidate=%s payload=%s",
+            collection_name,
+            len(record.vector),
+            _safe_log_json(record.payload)
+            if collection_name == QDRANT_CANDIDATES_COLLECTION
+            else None,
+            _safe_log_json(record.payload),
+        )
+
+
+def _safe_log_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+
 def _embedding_vector_for_text(_text: str) -> list[float]:
-    return [0.0]
+    return list(QDRANT_DUMMY_VECTOR)
 
 
 def _validate_metadata_values(metadata: dict[str, Any]) -> None:
