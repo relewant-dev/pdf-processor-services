@@ -60,7 +60,7 @@ def test_candidate_schema_contains_required_table_fields() -> None:
         "current_company",
         "availability_date",
         "notes",
-        "language",
+        "languages",
         "certifications",
         "created_at",
         "updated_at",
@@ -104,7 +104,7 @@ def test_build_metadata_extraction_prompt_contains_strict_schema_instructions() 
     assert "The document may be written in any language." in prompt
     assert '"first_name"' in prompt
     assert '"previous_works"' in prompt
-    assert '"language"' in prompt
+    assert '"languages"' in prompt
     assert '"certifications"' in prompt
     assert "Jane Doe" in prompt
 
@@ -165,7 +165,7 @@ def test_extract_payload_with_ollama_uses_candidate_schema_format_and_service_me
                 "current_company": "Acme",
                 "availability_date": None,
                 "notes": None,
-                "language": ["Italiano"],
+                "languages": ["Italiano"],
                 "certifications": [],
                 "created_at": None,
                 "updated_at": None,
@@ -183,9 +183,7 @@ def test_extract_payload_with_ollama_uses_candidate_schema_format_and_service_me
 
     assert payload["id"].startswith("candidate-")
     assert payload["document_hash"]
-    assert payload["raw_text"] == (
-        "Curriculum vitae\nGiulia Bianchi\nIstruzione: Laurea in Informatica"
-    )
+    assert "raw_text" not in payload
     assert payload["first_name"] == "Giulia"
     assert payload["education"] == [{"degree": "Laurea in Informatica"}]
     assert captured["response_format"] == CandidateVectorMetadata.model_json_schema()
@@ -283,7 +281,7 @@ def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None
         "competences": {"technical": ["rust", "python"]},
         "education": [{"degree": "MSc Computer Science"}],
         "certifications": ["Kubernetes Administrator"],
-        "language": ["English", "French"],
+        "languages": ["English", "French"],
         "current_job_title": "Principal Engineer",
         "current_company": "Acme",
         "raw_text": "Candidate profile",
@@ -299,7 +297,7 @@ def test_build_vector_metadata_uses_extracted_candidate_payload_values() -> None
     assert metadata["competences"] == {"technical": ["rust", "python"]}
     assert metadata["education"] == [{"degree": "MSc Computer Science"}]
     assert metadata["certifications"] == ["Kubernetes Administrator"]
-    assert metadata["language"] == ["English", "French"]
+    assert metadata["languages"] == ["English", "French"]
 
 
 def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> None:
@@ -323,7 +321,7 @@ def test_build_vector_metadata_allows_missing_optional_candidate_fields() -> Non
     assert metadata["current_company"] is None
     assert metadata["availability_date"] is None
     assert metadata["notes"] is None
-    assert metadata["language"] is None
+    assert metadata["languages"] == []
     assert metadata["certifications"] == []
 
 
@@ -391,7 +389,7 @@ def test_database_first_workflow_uses_existing_candidate_without_extraction(
         "first_name": "Ada",
         "last_name": "Lovelace",
         "certifications": ["Math"],
-        "language": ["English"],
+        "languages": ["English"],
     }
 
     async def fake_infer(document_text: str, question: str) -> str:
@@ -568,3 +566,321 @@ def test_build_vector_records_keeps_multipage_insurance_pdf_in_one_record(
     assert len(records) == 1
     assert records[0].payload["policy_number"] == "MULTI-1"
     assert "chunk_index" not in records[0].payload
+
+
+def test_candidate_education_alias_is_preserved_in_qdrant_payload() -> None:
+    records = build_vector_db_records(
+        {
+            "id": "candidate-alias-1",
+            "first_name": "Maria",
+            "education_history": [
+                {
+                    "degree": "MSc Computer Science",
+                    "institution": "University of Example",
+                }
+            ],
+            "raw_text": "Education: MSc Computer Science, University of Example",
+        },
+        metadata_kind="candidate",
+    )
+
+    assert records[0].payload["education"] == [
+        {
+            "degree": "MSc Computer Science",
+            "institution": "University of Example",
+        }
+    ]
+    assert records[0].vector == [1.0]
+    assert len(records[0].vector) == document_persistence.QDRANT_DUMMY_VECTOR_SIZE
+
+
+def test_candidate_payload_normalizes_aliases_without_duplicate_root_keys() -> None:
+    records = build_vector_db_records(
+        {
+            "id": "candidate-canonical-1",
+            "first_name": "Elena",
+            "education": None,
+            '"education"': [
+                {"degree": "MSc Artificial Intelligence"},
+                {"degree": "BSc Computer Science"},
+            ],
+            "work_experience": [
+                {"company": "Acme", "title": "Machine Learning Engineer"}
+            ],
+            "competencies": {"technical": ["Python", "Qdrant"]},
+            "languages": ["English", "Italian"],
+            "company": "Acme",
+            "job_title": "Senior Machine Learning Engineer",
+            "raw_text": "Sample CV with education and work experience",
+        },
+        metadata_kind="candidate",
+    )
+
+    payload = records[0].payload
+
+    assert payload["education"] == [
+        {"degree": "MSc Artificial Intelligence"},
+        {"degree": "BSc Computer Science"},
+    ]
+    assert payload["previous_works"] == [
+        {"company": "Acme", "title": "Machine Learning Engineer"}
+    ]
+    assert payload["competences"] == {"technical": ["Python", "Qdrant"]}
+    assert payload["languages"] == ["English", "Italian"]
+    assert payload["current_company"] == "Acme"
+    assert payload["current_job_title"] == "Senior Machine Learning Engineer"
+    assert '"education"' not in payload
+    assert "work_experience" not in payload
+    assert "competencies" not in payload
+    assert "language" not in payload
+    assert "company" not in payload
+    assert "job_title" not in payload
+    assert "raw_extraction" not in payload
+
+
+def test_database_answer_uses_canonical_candidate_education_in_api_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_record = {
+        "id": "candidate-saved-education",
+        "document_hash": document_persistence._document_hash("CV text"),
+        "first_name": "Elena",
+        "education": [{"degree": "MSc Artificial Intelligence"}],
+        "previous_works": [{"company": "Acme"}],
+    }
+
+    async def fake_get_document_by_hash(collection_name: str, document_hash: str):
+        return saved_record
+
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        assert "MSc Artificial Intelligence" in prompt
+        assert "education" in prompt
+        return "Education: MSc Artificial Intelligence"
+
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(
+        document_persistence,
+        "log_performance_event",
+        lambda event, **fields: None,
+    )
+
+    result = asyncio.run(
+        answer_document_prompt_from_database("CV text", "What education does she have?")
+    )
+
+    assert result.response == "Education: MSc Artificial Intelligence"
+
+
+def test_persist_candidate_payload_logs_payload_vector_and_collection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: list[tuple[str, tuple[object, ...]]] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def put(self, path: str, **kwargs: object) -> FakeResponse:
+            logged.append((path, (kwargs,)))
+            return FakeResponse()
+
+    monkeypatch.setattr(document_persistence.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(
+        document_persistence.logger,
+        "info",
+        lambda message, *args: logged.append((message, args)),
+    )
+
+    asyncio.run(
+        persist_extracted_payload(
+            document_persistence.QDRANT_CANDIDATES_COLLECTION,
+            {
+                "id": "candidate-log-1",
+                "first_name": "Nina",
+                "studies": [{"degree": "BSc Software Engineering"}],
+                "raw_text": "Education: BSc Software Engineering",
+            },
+            metadata_kind="candidate",
+        )
+    )
+
+    upsert_log = next(
+        item for item in logged if str(item[0]).startswith("Qdrant upsert prepared")
+    )
+    assert document_persistence.QDRANT_CANDIDATES_COLLECTION in upsert_log[1]
+    assert 1 in upsert_log[1]
+    assert "BSc Software Engineering" in str(upsert_log[1])
+    assert any(path == "/collections/candidates/points" for path, _ in logged)
+
+
+def test_ensure_qdrant_collections_creates_dummy_vector_collections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[str, dict[str, object]]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int = 200) -> None:
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def get(self, path: str) -> FakeResponse:
+            return FakeResponse(status_code=404)
+
+        async def put(self, path: str, **kwargs: object) -> FakeResponse:
+            requests.append((path, kwargs["json"]))
+            return FakeResponse()
+
+    monkeypatch.setattr(document_persistence.httpx, "AsyncClient", FakeClient)
+
+    asyncio.run(document_persistence.ensure_qdrant_collections())
+
+    assert requests == [
+        (
+            "/collections/candidates",
+            {"vectors": {"size": 1, "distance": "Cosine"}},
+        ),
+        (
+            "/collections/insurances",
+            {"vectors": {"size": 1, "distance": "Cosine"}},
+        ),
+    ]
+
+
+def test_cv_workflow_saves_ollama_extracted_canonical_candidate_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample_cv_text = (
+        "Alex Morgan\n"
+        "Milan, Italy | alex@example.com\n"
+        "Professional background\n"
+        "Senior Data Engineer at Relewant from 2021 to present.\n"
+        "Earlier Software Engineer at Example Labs from 2018 to 2021.\n"
+        "Academic background\n"
+        "MSc Computer Science, Politecnico di Milano, 2018.\n"
+        "Skills: Python, Qdrant, ETL. Languages: English, Italian."
+    )
+    calls: dict[str, object] = {"get_count": 0}
+
+    async def fake_get_document_by_hash(collection_name: str, document_hash: str):
+        calls["get_count"] = int(calls["get_count"]) + 1
+        if calls["get_count"] < 3:
+            return None
+        return calls["stored_payload"]
+
+    async def fake_chat_with_ollama(
+        prompt: str, *, response_format: dict[str, object] | str | None = None
+    ) -> str:
+        if "Classify the uploaded document" in prompt:
+            return '{"document_type":"cv"}'
+        if "information extraction system" in prompt:
+            calls["extraction_prompt"] = prompt
+            return json.dumps(
+                {
+                    "id": None,
+                    "first_name": "Alex",
+                    "last_name": "Morgan",
+                    "email": "alex@example.com",
+                    "phone": None,
+                    "seniority": "senior",
+                    "city": "Milan",
+                    "country": "Italy",
+                    "address": None,
+                    "current_job_title": "Senior Data Engineer",
+                    "current_company": "Relewant",
+                    "education": [
+                        {
+                            "degree": "MSc Computer Science",
+                            "institution": "Politecnico di Milano",
+                            "year": "2018",
+                        }
+                    ],
+                    "previous_works": [
+                        {
+                            "title": "Senior Data Engineer",
+                            "company": "Relewant",
+                            "start_date": "2021",
+                            "end_date": "present",
+                        },
+                        {
+                            "title": "Software Engineer",
+                            "company": "Example Labs",
+                            "start_date": "2018",
+                            "end_date": "2021",
+                        },
+                    ],
+                    "competences": ["Python", "Qdrant", "ETL"],
+                    "languages": ["English", "Italian"],
+                    "certifications": [],
+                    "notes": None,
+                    "availability_date": None,
+                    "created_at": None,
+                    "updated_at": None,
+                }
+            )
+        calls["answer_prompt"] = prompt
+        return "Alex Morgan was saved."
+
+    async def fake_upsert_records(collection_name: str, records: list[object]) -> None:
+        calls["collection_name"] = collection_name
+        calls["stored_payload"] = records[0].payload
+
+    monkeypatch.setattr(
+        document_persistence, "get_document_by_hash", fake_get_document_by_hash
+    )
+    monkeypatch.setattr(document_persistence, "chat_with_ollama", fake_chat_with_ollama)
+    monkeypatch.setattr(document_persistence, "_upsert_records", fake_upsert_records)
+    monkeypatch.setattr(
+        document_persistence,
+        "log_performance_event",
+        lambda event, **fields: None,
+    )
+
+    result = asyncio.run(
+        answer_document_prompt_from_database(sample_cv_text, "Summarize this CV")
+    )
+
+    payload = calls["stored_payload"]
+    assert result.document_type == "cv"
+    assert calls["collection_name"] == document_persistence.QDRANT_CANDIDATES_COLLECTION
+    assert payload["education"]
+    assert payload["previous_works"]
+    assert payload["education"][0]["degree"] == "MSc Computer Science"
+    assert payload["previous_works"][0]["company"] == "Relewant"
+    assert payload["current_job_title"] == "Senior Data Engineer"
+    assert payload["current_company"] == "Relewant"
+    assert payload["competences"] == ["Python", "Qdrant", "ETL"]
+    assert payload["languages"] == ["English", "Italian"]
+    assert "language" not in payload
+    assert "work_experience" not in payload
+    assert "education_history" not in payload
+    assert "raw_extraction" not in payload
+    assert "education and work experience" in calls["extraction_prompt"].lower()

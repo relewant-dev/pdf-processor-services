@@ -12,6 +12,7 @@ from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from clients.ollama import chat_with_ollama
+from logging_config import get_logger
 from services.performance import log_performance_event
 from config import (
     QDRANT_CANDIDATES_COLLECTION,
@@ -22,6 +23,9 @@ from config import (
 
 
 VECTOR_DB_CHUNK_SIZE = 4000
+QDRANT_DUMMY_VECTOR_SIZE = 1
+QDRANT_DUMMY_VECTOR = [1.0]
+logger = get_logger()
 DocumentDomain = Literal["cv", "insurance", "other"]
 MetadataKind = Literal["candidate", "insurance"]
 
@@ -33,7 +37,7 @@ class VectorDbMetadataError(ValueError):
 class CandidateVectorMetadata(BaseModel):
     """Candidate table payload used as the source of truth for CV answers."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., min_length=1)
     first_name: str | None = None
@@ -51,12 +55,22 @@ class CandidateVectorMetadata(BaseModel):
     current_company: str | None = None
     availability_date: str | None = None
     notes: str | None = None
-    language: str | list[str] | None = None
+    languages: list[str] = Field(default_factory=list)
     certifications: list[str] | list[dict[str, Any]] = Field(default_factory=list)
     document_hash: str | None = None
-    raw_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
+
+    @field_validator(
+        "previous_works", "education", "languages", "certifications", mode="before"
+    )
+    @classmethod
+    def repeated_fields_must_be_lists(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
 
 
 class InsuranceVectorMetadata(BaseModel):
@@ -77,7 +91,6 @@ class InsuranceVectorMetadata(BaseModel):
     currency: str | None = None
     beneficiary: dict[str, Any] | None = None
     document_hash: str | None = None
-    raw_text: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -88,7 +101,6 @@ class GenericVectorMetadata(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str = Field(..., min_length=1)
-    raw_text: str | None = None
 
 
 class VectorDbRecord(BaseModel):
@@ -272,10 +284,26 @@ async def extract_payload_with_ollama(
     raw_result = await chat_with_ollama(
         prompt, response_format=schema.model_json_schema()
     )
+    logger.info(
+        "Ollama extraction completed metadata_kind=%s extracted_pdf_text_length=%s raw_response=%s",
+        metadata_kind,
+        len(document_text),
+        raw_result,
+    )
     extracted_payload = _parse_json_object(raw_result)
+    logger.info(
+        "Ollama extraction parsed metadata_kind=%s parsed_candidate_object=%s",
+        metadata_kind,
+        _safe_log_json(extracted_payload) if metadata_kind == "candidate" else None,
+    )
     payload = _with_service_metadata(extracted_payload, document_text, metadata_kind)
-    build_vector_db_metadata(payload, metadata_kind=metadata_kind)
-    return payload
+    metadata = build_vector_db_metadata(payload, metadata_kind=metadata_kind)
+    logger.info(
+        "Ollama extraction canonicalized metadata_kind=%s parsed_candidate_object=%s",
+        metadata_kind,
+        _safe_log_json(metadata) if metadata_kind == "candidate" else None,
+    )
+    return metadata
 
 
 async def build_answer_from_database_record(
@@ -340,10 +368,18 @@ def build_vector_db_records(
     *,
     metadata_kind: str | None = None,
 ) -> list[VectorDbRecord]:
-    metadata = build_vector_db_metadata(
+    raw_embedding_text = extracted_payload.get("raw_text")
+    normalized_payload = _normalize_metadata_aliases(
         extracted_payload, metadata_kind=metadata_kind
     )
-    embedding_text = _embedding_text_from_payload(metadata)
+    metadata = build_vector_db_metadata(
+        normalized_payload, metadata_kind=metadata_kind
+    )
+    embedding_text = (
+        raw_embedding_text
+        if isinstance(raw_embedding_text, str) and raw_embedding_text
+        else _embedding_text_from_payload(metadata)
+    )
     chunks = (
         [embedding_text]
         if metadata_kind == "insurance"
@@ -366,9 +402,13 @@ def build_vector_db_metadata(
     *,
     metadata_kind: str | None = None,
 ) -> dict[str, Any]:
+    normalized_payload = _normalize_metadata_aliases(
+        extracted_payload, metadata_kind=metadata_kind
+    )
+    normalized_payload = _without_collection_excluded_fields(normalized_payload)
     schema = _metadata_schema(metadata_kind)
     try:
-        metadata_model = schema.model_validate(extracted_payload)
+        metadata_model = schema.model_validate(normalized_payload)
     except ValidationError as exc:
         raise VectorDbMetadataError(str(exc)) from exc
 
@@ -429,13 +469,33 @@ def _build_metadata_extraction_prompt(
         "Normalize explicitly stated dates to YYYY-MM-DD when possible; otherwise "
         "preserve the explicit date text. Normalize explicitly stated money amounts "
         "as numbers and currencies as ISO 4217 codes when possible.\n"
-        "Service-owned fields (id, document_hash, raw_text, created_at, updated_at) "
+        "Service-owned fields (id, document_hash, created_at, updated_at) "
         "should be null unless explicitly present in the document; the service may "
         "overwrite them after extraction.\n"
-        f"Metadata kind: {metadata_kind}.\n"
+        + (_candidate_extraction_instructions() if metadata_kind == "candidate" else "")
+        + f"Metadata kind: {metadata_kind}.\n"
         f"Required top-level fields to populate: {field_names}.\n\n"
         f"JSON Schema:\n{json_schema}\n\n"
         f"Document text:\n{document_text}"
+    )
+
+
+def _candidate_extraction_instructions() -> str:
+    return (
+        "Candidate extraction requirements:\n"
+        "- Return one JSON object using these canonical candidate fields: first_name, "
+        "last_name, email, phone, seniority, city, country, address, "
+        "current_job_title, current_company, education, previous_works, "
+        "competences, languages, certifications, notes.\n"
+        "- Extract education and work experience even when headings or section titles "
+        "vary, are omitted, or are written in another language.\n"
+        "- Preserve every distinct education entry as an object in education.\n"
+        "- Preserve every distinct job, role, internship, contract, or work "
+        "experience entry as an object in previous_works.\n"
+        "- Put skills, technologies, and professional capabilities in competences.\n"
+        "- Put spoken/written languages in languages, not in notes.\n"
+        "- Use null only when information is truly absent, and do not invent "
+        "unstated values.\n"
     )
 
 
@@ -462,7 +522,11 @@ def _parse_json_object(raw_result: str) -> dict[str, Any]:
     try:
         parsed = json.loads(stripped_result)
     except json.JSONDecodeError:
-        parsed = _parse_embedded_json_object(stripped_result)
+        try:
+            parsed = _parse_embedded_json_object(stripped_result)
+        except VectorDbMetadataError:
+            logger.error("Ollama metadata response was not valid JSON raw_response=%s", raw_result)
+            raise
 
     if not isinstance(parsed, dict):
         raise VectorDbMetadataError("Ollama metadata response must be a JSON object.")
@@ -495,7 +559,6 @@ def _with_service_metadata(
     timestamp = _utc_timestamp()
     payload["id"] = _service_document_id(payload.get("id"), document_hash, metadata_kind)
     payload["document_hash"] = document_hash
-    payload["raw_text"] = document_text
     payload["created_at"] = payload.get("created_at") or timestamp
     payload["updated_at"] = timestamp
     return payload
@@ -543,10 +606,46 @@ def _metadata_kind_for_collection(collection_name: str) -> str | None:
     return None
 
 
+async def ensure_qdrant_collections() -> None:
+    """Create required Qdrant collections for dummy-vector payload storage."""
+    for collection_name in (QDRANT_CANDIDATES_COLLECTION, QDRANT_INSURANCES_COLLECTION):
+        await _ensure_qdrant_collection(collection_name)
+
+
+async def _ensure_qdrant_collection(collection_name: str) -> None:
+    body = {
+        "vectors": {
+            "size": QDRANT_DUMMY_VECTOR_SIZE,
+            "distance": "Cosine",
+        }
+    }
+    timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
+    async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
+        existing_response = await client.get(f"/collections/{collection_name}")
+        if existing_response.status_code == 200:
+            return
+        if existing_response.status_code != 404:
+            try:
+                existing_response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise ToolError(
+                    f"Failed to inspect Qdrant collection '{collection_name}'."
+                ) from exc
+
+        response = await client.put(f"/collections/{collection_name}", json=body)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ToolError(
+                f"Failed to initialize Qdrant collection '{collection_name}'."
+            ) from exc
+
+
 async def _upsert_records(
     collection_name: str, records: list[VectorDbRecord]
 ) -> None:
     body = {"points": [record.model_dump(mode="json") for record in records]}
+    _log_qdrant_upsert(collection_name, records)
     timeout = httpx.Timeout(QDRANT_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(base_url=QDRANT_URL, timeout=timeout) as client:
         response = await client.put(
@@ -591,6 +690,13 @@ def _embedding_text_from_payload(metadata: dict[str, Any]) -> str:
     return " ".join(str(value) for value in metadata.values() if value is not None)
 
 
+def _without_collection_excluded_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    collection_excluded_keys = {"raw_text", "raw_extraction"}
+    return {
+        key: value for key, value in payload.items() if key not in collection_excluded_keys
+    }
+
+
 def _split_embedding_text(text: str) -> list[str]:
     if not text:
         return [""]
@@ -616,8 +722,73 @@ def _metadata_for_chunk(
     return chunk_metadata
 
 
+def _normalize_metadata_aliases(
+    payload: dict[str, Any], *, metadata_kind: str | None
+) -> dict[str, Any]:
+    if metadata_kind != "candidate":
+        return payload
+
+    schema_fields = set(CandidateVectorMetadata.model_fields)
+    alias_map = {
+        "competencies": "competences",
+        "skills": "competences",
+        "previous_work": "previous_works",
+        "work_experience": "previous_works",
+        "experience": "previous_works",
+        "employment_history": "previous_works",
+        "educations": "education",
+        "education_history": "education",
+        "studies": "education",
+        "language": "languages",
+        "certificates": "certifications",
+        "company": "current_company",
+        "job_title": "current_job_title",
+        "title": "current_job_title",
+    }
+
+    normalized: dict[str, Any] = {}
+
+    for raw_key, value in payload.items():
+        key = _canonical_payload_key(raw_key)
+        if key in {"raw_text", "raw_extraction"}:
+            continue
+        target_key = alias_map.get(key, key)
+        if target_key in schema_fields:
+            if target_key not in normalized or _is_missing_candidate_value(
+                normalized[target_key]
+            ):
+                normalized[target_key] = value
+
+    return normalized
+
+
+def _canonical_payload_key(key: Any) -> str:
+    return str(key).strip().strip('"').strip("'")
+
+
+def _is_missing_candidate_value(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _log_qdrant_upsert(collection_name: str, records: list[VectorDbRecord]) -> None:
+    for record in records:
+        logger.info(
+            "Qdrant upsert prepared collection=%s vector_length=%s structured_candidate=%s payload=%s",
+            collection_name,
+            len(record.vector),
+            _safe_log_json(record.payload)
+            if collection_name == QDRANT_CANDIDATES_COLLECTION
+            else None,
+            _safe_log_json(record.payload),
+        )
+
+
+def _safe_log_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
+
+
 def _embedding_vector_for_text(_text: str) -> list[float]:
-    return [0.0]
+    return list(QDRANT_DUMMY_VECTOR)
 
 
 def _validate_metadata_values(metadata: dict[str, Any]) -> None:
