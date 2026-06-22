@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import logging
 import textwrap
 from pathlib import Path
@@ -46,26 +45,19 @@ def render_anonymized_cv_pdf(
 
         overlay_reader = PdfReader(str(overlay_path))
         overlay_pages = list(overlay_reader.pages)
-        generated_content_page_count = len(overlay_pages)
-        logger.debug("CV PDF generated content page count: %s", generated_content_page_count)
-        output_pages = _remove_duplicate_pdf_pages(overlay_pages)
-        if len(output_pages) != generated_content_page_count:
-            logger.debug(
-                "CV PDF removed %s duplicate generated content page(s).",
-                generated_content_page_count - len(output_pages),
-            )
-        if not output_pages:
+        logger.debug("CV PDF generated content page count: %s", len(overlay_pages))
+        if not overlay_pages:
             raise ToolError("Generated anonymized CV overlay does not contain any pages.")
 
         writer = PdfWriter()
-        for page_number, overlay_page in enumerate(output_pages, start=1):
+        for page_number, overlay_page in enumerate(overlay_pages, start=1):
             logger.debug("CV PDF merging generated content page %s onto template page 1.", page_number)
             base_page = copy.deepcopy(template_reader.pages[0])
             base_page.merge_page(overlay_page)
             writer.add_page(base_page)
             logger.debug("CV PDF added output page %s.", page_number)
 
-        writer_pages = getattr(writer, "pages", output_pages)
+        writer_pages = getattr(writer, "pages", overlay_pages)
         final_output_page_count = len(writer_pages)
         logger.debug("CV PDF final output page count before saving: %s", final_output_page_count)
         with output_path.open("wb") as output_file:
@@ -78,43 +70,6 @@ def render_anonymized_cv_pdf(
     finally:
         if "overlay_path" in locals():
             overlay_path.unlink(missing_ok=True)
-
-
-def _remove_duplicate_pdf_pages(pages: list[object]) -> list[object]:
-    """Remove generated pages that contain exactly the same information."""
-    unique_pages: list[object] = []
-    seen_fingerprints: set[str] = set()
-
-    for page in pages:
-        fingerprint = _pdf_page_fingerprint(page)
-        if fingerprint and fingerprint in seen_fingerprints:
-            continue
-        unique_pages.append(page)
-        if fingerprint:
-            seen_fingerprints.add(fingerprint)
-
-    return unique_pages
-
-
-def _pdf_page_fingerprint(page: object) -> str:
-    contents = getattr(page, "get_contents", None)
-    if callable(contents):
-        page_contents = contents()
-        if page_contents is not None:
-            streams = page_contents if isinstance(page_contents, list) else [page_contents]
-            stream_data = b"".join(
-                stream.get_data() for stream in streams if hasattr(stream, "get_data")
-            )
-            if stream_data:
-                return hashlib.sha256(stream_data).hexdigest()
-
-    extract_text = getattr(page, "extract_text", None)
-    if callable(extract_text):
-        page_text = extract_text() or ""
-        normalized_text = "\n".join(line.strip() for line in page_text.splitlines() if line.strip())
-        if normalized_text:
-            return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
-    return ""
 
 
 def _write_text_overlay(
