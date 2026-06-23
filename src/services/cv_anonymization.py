@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from fastmcp.exceptions import ToolError
 
 from clients.ollama import chat_with_ollama
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_CV_SECTIONS = (
     "Personal data",
@@ -13,91 +17,77 @@ REQUIRED_CV_SECTIONS = (
     "Hobby",
 )
 
-CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize and format CV content for PDF export.
+CV_ANONYMIZATION_PROMPT_TEMPLATE = """You are anonymizing and reorganizing a CV.
 
-Primary objective:
-- This workflow must not rewrite, shorten, summarize, evaluate relevance, or remove professional content.
-- Your only tasks are to anonymize private/personal identifying data and reorganize the remaining CV text into the required sections.
-- Preserve as much original professional information as possible, including the original level of detail and bullet granularity.
+Your task is NOT to summarize.
+Your task is NOT to shorten.
+Your task is NOT to evaluate relevance.
+Your task is NOT to remove professional content.
 
-Critical source-of-truth rule:
-- After this PDF text has been converted to plain text, you are the only component allowed to classify CV content into sections.
-- All section classification must be based only on the converted CV text below.
-- Do not use assumptions.
-- Do not infer content outside the given CV text.
-- Do not invent information.
+Your only tasks are:
 
-Privacy rules:
-- Only anonymize personal identifying data such as name, email, phone, LinkedIn, address, precise personal location, and other private identifiers.
-- Keep only the candidate first/given name when a name is present; remove surnames/family names.
-- Remove phone numbers.
-- Remove email addresses.
-- Remove LinkedIn and personal profile URLs.
-- Remove street addresses.
-- Remove street names.
-- Remove house numbers.
-- Remove postal codes.
-- Keep only the city from any address, for example "Via Roma 10, 6900 Lugano, Switzerland" becomes "Lugano".
-- Company names, client names, technologies, project descriptions, dates, roles, education, and professional achievements must be preserved unless the application explicitly requires them to be anonymized.
-- Preserve all non-sensitive professional information: professional summary, all work experiences, projects, responsibilities, achievements, teaching/training activities, technical stacks, education, skills, certifications, languages, technical competencies, and hobbies.
-- Anonymize personal/sensitive data only. Do not remove professional content unless that exact content contains personal identifying data.
+1. remove or anonymize private personal identifiers;
+2. place the remaining text into the required sections.
 
-Classification rules:
-- Classify all CV content into the most appropriate required section yourself, using only the converted CV text.
-- Always classify content into these exact sections in this exact order:
-  1. Personal data
-  2. Experience
-  3. Education
-  4. Skills
-  5. Certifications
-  6. Hobby
-- Skills may appear under headings such as Core Competencies, Technical Skills, Stack, Technologies, Tools, Frameworks, Methodologies, or inside experience descriptions.
-- If skill-related information exists anywhere in the CV text, the Skills section must contain it.
-- If information belongs to skills, place it in Skills.
-- If information belongs to experience, place it in Experience.
-- If information belongs to education, place it in Education.
-- Keep certifications and licenses in Certifications, not Education or Skills.
-- Keep hobbies, interests, and extracurricular non-professional activities in Hobby.
-- Do not invent information.
-- Do not use assumptions.
-- Do not infer content outside the given CV text.
+You must preserve the original amount of professional detail. Keep all jobs, projects, bullets, technical stacks, skills, education, languages, training, achievements, dates, companies, clients, and technologies unless the specific text is private personal identifying data.
 
-Professional preservation rules:
-- Do not summarize the CV.
-- Do not shorten the CV.
-- Do not remove professional information.
-- Do not judge whether an experience is relevant or not.
-- Do not delete jobs, projects, bullet points, skills, education, training, languages, or technical stacks unless the specific text contains private data.
-- Keep all work experiences, projects, responsibilities, achievements, teaching/training activities, technical stacks, education, languages, and skills.
-- Preserve detailed bullet points instead of replacing them with short summaries.
-- Keep technical skills from Core Competencies, Technical Skills, Stack, Technologies, Tools, Frameworks, Methodologies, and similar source lines.
+Required sections, exactly in this order:
+**Personal data**
+**Experience**
+**Education**
+**Skills**
+**Certifications**
+**Hobby**
 
-Formatting rules:
-- You must output exactly these sections and in this order:
-  1. Personal data
-  2. Experience
-  3. Education
-  4. Skills
-  5. Certifications
-  6. Hobby
-- Never omit a section heading.
-- Never leave a section empty.
-- If no information is available for a section, write `Not specified`.
-- Never drop a section heading. Do not duplicate section headings.
-- Section titles must be bold in the exported PDF. Mark each section title with markdown bold delimiters, for example **Personal data**, so the renderer can draw real bold text without showing the delimiters.
-- Use only round bullet points for lists; never use square bullet points.
-- For each section, include all relevant anonymized content found in the input CV.
-- If no relevant content exists for a section, include the bold section title and write a round bullet point with "Not specified".
+Rules:
 
-Output rules:
-- Return only the formatted anonymized CV content.
-- Do not start with an introductory sentence such as "Here is the anonymized CV content for PDF export:".
-- Do not add introductions, explanations, comments, notes, markdown fences, or extra text.
-- Do not write comments such as "I removed this section because..." or any explanation of removed content.
+* Copy professional content as faithfully as possible.
+* Do not compress multiple bullet points into one.
+* Do not replace detailed experience with a short summary.
+* Do not output `Not specified` for Experience if the CV contains work experience.
+* Do not output `Not specified` for Skills if the CV contains Core Competencies, Technical Skills, Stack, technologies, tools, languages, frameworks, methodologies, cloud platforms, databases, or testing tools.
+* Professional Summary belongs in Personal data or Experience, depending on the content.
+* Professional Experience, Teaching & Training, jobs, projects, responsibilities, and achievements belong in Experience.
+* Education belongs in Education.
+* Core Competencies, Technical Skills, Stack lines, programming languages, frameworks, tools, cloud/devops, databases, methodologies, and spoken languages belong in Skills.
+* Certifications and licenses belong in Certifications.
+* Hobbies and interests belong in Hobby.
+* If a section has no information in the source CV, write one bullet: `• Not specified`.
+* Never write explanations, notes, or comments.
+* Never say that content was removed because it was not relevant.
+* Return only the formatted anonymized CV.
+
+Privacy:
+
+* Remove surname/family name.
+* Keep only the given first name if present.
+* Remove email, phone number, LinkedIn/profile URLs, street address, street name, house number, and postal code.
+* Keep city only from addresses.
+* Do not remove company names, client names, roles, projects, technologies, dates, education, professional achievements, or technical details.
+
+Formatting:
+
+* Section titles must be bold in the exported PDF. Mark each section title with markdown bold delimiters exactly as listed above.
+* Use only round bullet points for lists; never use square bullet points.
 
 CV content:
 {cv_text}
 """
+
+CV_REPAIR_PROMPT_TEMPLATE = """The previous answer incorrectly omitted professional content. Reprocess the same CV text. Preserve all professional details and populate Experience and Skills from the CV text. Do not summarize. Do not output `Not specified` for sections that have content in the source CV.
+
+Validation error:
+{validation_error}
+
+Previous answer:
+{previous_answer}
+
+CV content:
+{cv_text}
+"""
+
+CV_OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 32768, "num_predict": 12000}
+
 
 
 async def anonymize_cv_text(cv_text: str) -> str:
@@ -105,13 +95,50 @@ async def anonymize_cv_text(cv_text: str) -> str:
     if not cleaned_text:
         raise ToolError("Extracted CV text is empty and cannot be anonymized.")
 
-    response = await chat_with_ollama(
-        CV_ANONYMIZATION_PROMPT_TEMPLATE.format(cv_text=cleaned_text)
-    )
+    prompt = CV_ANONYMIZATION_PROMPT_TEMPLATE.format(cv_text=cleaned_text)
+    logger.info("cv_anonymization_ollama_request cv_text_chars=%s prompt_chars=%s", len(cleaned_text), len(prompt))
+    response = await chat_with_ollama(prompt, options=CV_OLLAMA_OPTIONS)
+    logger.info("cv_anonymization_ollama_response output_chars=%s", len(response))
+    anonymized_text = _clean_model_response(response)
+    validation_error = validate_anonymized_cv(anonymized_text, cleaned_text)
+    if validation_error is not None:
+        repair_prompt = CV_REPAIR_PROMPT_TEMPLATE.format(
+            validation_error=validation_error,
+            previous_answer=anonymized_text,
+            cv_text=cleaned_text,
+        )
+        logger.warning("cv_anonymization_validation_failed error=%s repair_prompt_chars=%s", validation_error, len(repair_prompt))
+        repair_response = await chat_with_ollama(repair_prompt, options=CV_OLLAMA_OPTIONS)
+        logger.info("cv_anonymization_repair_response output_chars=%s", len(repair_response))
+        anonymized_text = _clean_model_response(repair_response)
+        validation_error = validate_anonymized_cv(anonymized_text, cleaned_text)
+        if validation_error is not None:
+            raise ToolError(f"Ollama returned an invalid anonymized CV: {validation_error}")
+    return normalize_cv_sections(anonymized_text)
+
+
+def validate_anonymized_cv(anonymized_text: str, source_text: str) -> str | None:
+    for section in REQUIRED_CV_SECTIONS:
+        heading = f"**{section}**"
+        if anonymized_text.count(heading) != 1:
+            return f"section heading {heading} must exist exactly once"
+    normalized = normalize_cv_sections(anonymized_text)
+    for section in REQUIRED_CV_SECTIONS:
+        content = _section_lines(normalized, section)
+        if not content or _content_is_empty(content):
+            return f"section {section} is empty"
+    if _source_contains_experience(source_text) and _section_is_not_specified(normalized, "Experience"):
+        return "Experience is Not specified even though the source CV contains professional experience"
+    if _source_contains_skills(source_text) and _section_is_not_specified(normalized, "Skills"):
+        return "Skills is Not specified even though the source CV contains technical skills"
+    return None
+
+
+def _clean_model_response(response: str) -> str:
     anonymized_text = _remove_introductory_sentence(response.strip())
     if not anonymized_text:
         raise ToolError("Ollama returned an empty anonymized CV response.")
-    return normalize_cv_sections(anonymized_text)
+    return anonymized_text
 
 
 def normalize_cv_sections(anonymized_text: str) -> str:
@@ -181,3 +208,36 @@ def _remove_introductory_sentence(anonymized_text: str) -> str:
     if anonymized_text.startswith(intro):
         return anonymized_text.removeprefix(intro).lstrip()
     return anonymized_text
+
+
+def _section_lines(normalized_text: str, section: str) -> list[str]:
+    lines = normalized_text.splitlines()
+    heading = f"**{section}**"
+    try:
+        start = lines.index(heading) + 1
+    except ValueError:
+        return []
+    content: list[str] = []
+    for line in lines[start:]:
+        if line.startswith("**") and line.endswith("**"):
+            break
+        if line.strip():
+            content.append(line.strip())
+    return content
+
+
+def _section_is_not_specified(normalized_text: str, section: str) -> bool:
+    content = [line.removeprefix("•").strip().casefold() for line in _section_lines(normalized_text, section)]
+    return content == ["not specified"]
+
+
+def _source_contains_experience(source_text: str) -> bool:
+    lowered = source_text.casefold()
+    indicators = ("professional experience", "work experience", "experience", "developer", "engineer", "consultant", "manager", "architect", "analyst", "trainer", "teacher")
+    return any(indicator in lowered for indicator in indicators)
+
+
+def _source_contains_skills(source_text: str) -> bool:
+    lowered = source_text.casefold()
+    indicators = ("skills", "core competencies", "technical", "stack", "java", "spring boot", "python", "docker", "aws", "kafka", "react", "sql", "kubernetes", "gitlab ci/cd", "agile", "safe")
+    return any(indicator in lowered for indicator in indicators)

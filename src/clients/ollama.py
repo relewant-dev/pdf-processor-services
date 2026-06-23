@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+
 import httpx
 from fastmcp.exceptions import ToolError
 
 from config import OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL
 
+logger = logging.getLogger(__name__)
+
 
 async def chat_with_ollama(
-    prompt: str, *, response_format: dict[str, Any] | str | None = None
+    prompt: str,
+    *,
+    response_format: dict[str, Any] | str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> str:
     if not prompt.strip():
         raise ToolError("Prompt must not be empty.")
@@ -21,6 +28,16 @@ async def chat_with_ollama(
     }
     if response_format is not None:
         payload["format"] = response_format
+    if options is not None:
+        payload["options"] = options
+
+    logger.info(
+        "ollama_chat_request model=%s prompt_chars=%s response_format=%s options=%s",
+        OLLAMA_MODEL,
+        len(prompt),
+        response_format is not None,
+        options or {},
+    )
 
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
@@ -41,6 +58,7 @@ async def chat_with_ollama(
     content = message.get("content")
     if not content:
         raise ToolError("Ollama returned an unexpected response shape.")
+    logger.info("ollama_chat_response model=%s output_chars=%s", OLLAMA_MODEL, len(content))
     return content
 
 

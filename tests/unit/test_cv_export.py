@@ -64,7 +64,15 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
             "• Gabriele\n"
             "• Lugano\n"
             "**Experience**\n"
-            "• Senior Developer"
+            "• Senior Developer\n"
+            "**Education**\n"
+            "• Not specified\n"
+            "**Skills**\n"
+            "• Not specified\n"
+            "**Certifications**\n"
+            "• Not specified\n"
+            "**Hobby**\n"
+            "• Not specified"
         )
 
     monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
@@ -95,13 +103,10 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
         "**Hobby**\n"
         "• Not specified"
     )
-    assert "Keep only the candidate first/given name" in captured["prompt"]
-    assert "Remove phone numbers" in captured["prompt"]
-    assert "Remove email addresses" in captured["prompt"]
-    assert "Remove street addresses" in captured["prompt"]
-    assert "Remove house numbers" in captured["prompt"]
-    assert "Remove postal codes" in captured["prompt"]
-    assert "Keep only the city" in captured["prompt"]
+    assert "Keep only the given first name" in captured["prompt"]
+    assert "Remove email, phone number" in captured["prompt"]
+    assert "street address, street name, house number, and postal code" in captured["prompt"]
+    assert "Keep city only from addresses" in captured["prompt"]
     assert "Personal data" in captured["prompt"]
     assert "Experience" in captured["prompt"]
     assert "Education" in captured["prompt"]
@@ -111,15 +116,14 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert "Section titles must be bold in the exported PDF" in captured["prompt"]
     assert "Use only round bullet points" in captured["prompt"]
     assert "never use square bullet points" in captured["prompt"]
-    assert "Return only the formatted anonymized CV content" in captured["prompt"]
-    assert "Do not start with an introductory sentence" in captured["prompt"]
-    assert "Do not summarize the CV" in captured["prompt"]
-    assert "Do not shorten the CV" in captured["prompt"]
-    assert "Do not remove professional information" in captured["prompt"]
-    assert "Do not judge whether an experience is relevant or not" in captured["prompt"]
-    assert "Preserve detailed bullet points instead of replacing them with short summaries" in captured["prompt"]
-    assert "Company names, client names, technologies, project descriptions, dates, roles, education, and professional achievements must be preserved" in captured["prompt"]
-    assert "Do not write comments such as" in captured["prompt"]
+    assert "Return only the formatted anonymized CV" in captured["prompt"]
+    assert "Your task is NOT to summarize" in captured["prompt"]
+    assert "Your task is NOT to shorten" in captured["prompt"]
+    assert "Your task is NOT to evaluate relevance" in captured["prompt"]
+    assert "Your task is NOT to remove professional content" in captured["prompt"]
+    assert "Do not compress multiple bullet points into one" in captured["prompt"]
+    assert "Do not remove company names, client names, roles, projects" in captured["prompt"]
+    assert "Never write explanations, notes, or comments" in captured["prompt"]
 
 
 def test_anonymize_cv_text_preserves_professional_entries_and_detail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -177,9 +181,89 @@ def test_anonymize_cv_text_preserves_professional_entries_and_detail(monkeypatch
         assert result.count(heading) == 1
 
 
+def test_anonymize_cv_text_uses_deterministic_full_cv_ollama_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_chat_with_ollama(prompt: str, **kwargs: object) -> str:
+        captured["prompt"] = prompt
+        captured["options"] = kwargs.get("options")
+        return (
+            "**Personal data**\n• Candidate\n"
+            "**Experience**\n• Professional Experience: Senior Java Engineer at ExampleBank\n"
+            "**Education**\n• Education: MSc Computer Science\n"
+            "**Skills**\n• Technical Skills: Java, Spring Boot, Python, Docker, AWS, Kafka, React, SQL, Kubernetes, GitLab CI/CD, Agile/SAFe\n"
+            "**Certifications**\n• Not specified\n"
+            "**Hobby**\n• Not specified"
+        )
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    source_cv = (
+        "Page 1\nProfessional Experience\nSenior Java Engineer at ExampleBank\n"
+        "Built Spring Boot services with Kafka and SQL.\n"
+        "Page 2\nTechnical Skills\nJava, Spring Boot, Python, Docker, AWS, Kafka, React, SQL, Kubernetes, GitLab CI/CD, Agile/SAFe\n"
+        "Education\nMSc Computer Science"
+    )
+
+    result = asyncio.run(cv_anonymization.anonymize_cv_text(source_cv))
+
+    assert "Professional Experience" in captured["prompt"]
+    assert "Technical Skills" in captured["prompt"]
+    assert "Education" in captured["prompt"]
+    assert captured["options"] == {"temperature": 0, "num_ctx": 32768, "num_predict": 12000}
+    assert "Experience: Not specified" not in result
+    assert "Skills: Not specified" not in result
+
+
+def test_anonymize_cv_text_repairs_omitted_experience_and_skills(monkeypatch: pytest.MonkeyPatch) -> None:
+    prompts: list[str] = []
+
+    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return (
+                "**Personal data**\n• Candidate\n"
+                "**Experience**\n• Not specified\n"
+                "**Education**\n• MSc Computer Science\n"
+                "**Skills**\n• Not specified\n"
+                "**Certifications**\n• Not specified\n"
+                "**Hobby**\n• Not specified"
+            )
+        return (
+            "**Personal data**\n• Candidate\n"
+            "**Experience**\n• Senior Java Engineer at ExampleBank\n"
+            "**Education**\n• MSc Computer Science\n"
+            "**Skills**\n• Java, Spring Boot, Python, Docker, AWS, Kafka, React, SQL, Kubernetes, GitLab CI/CD, Agile/SAFe\n"
+            "**Certifications**\n• Not specified\n"
+            "**Hobby**\n• Not specified"
+        )
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    result = asyncio.run(cv_anonymization.anonymize_cv_text(
+        "Professional Experience: Senior Java Engineer at ExampleBank. Technical Skills: Java, Spring Boot, Python, Docker, AWS, Kafka, React, SQL, Kubernetes, GitLab CI/CD, Agile/SAFe. Education: MSc Computer Science."
+    ))
+
+    assert len(prompts) == 2
+    assert "previous answer incorrectly omitted professional content" in prompts[1]
+    assert "Senior Java Engineer at ExampleBank" in result
+    for skill in ("Java", "Spring Boot", "Python", "Docker", "AWS", "Kafka", "React", "SQL", "Kubernetes", "GitLab CI/CD", "Agile/SAFe"):
+        assert skill in result
+    assert "Experience: Not specified" not in result
+    assert "Skills: Not specified" not in result
+
+
 def test_anonymize_cv_text_removes_introductory_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
-        return "Here is the anonymized CV content for PDF export:\n**Personal data**\n• Lugano"
+        return (
+            "Here is the anonymized CV content for PDF export:\n"
+            "**Personal data**\n• Lugano\n"
+            "**Experience**\n• Not specified\n"
+            "**Education**\n• Not specified\n"
+            "**Skills**\n• Not specified\n"
+            "**Certifications**\n• Not specified\n"
+            "**Hobby**\n• Not specified"
+        )
 
     monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
 
