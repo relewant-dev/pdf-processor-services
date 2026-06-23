@@ -113,6 +113,68 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert "never use square bullet points" in captured["prompt"]
     assert "Return only the formatted anonymized CV content" in captured["prompt"]
     assert "Do not start with an introductory sentence" in captured["prompt"]
+    assert "Do not summarize the CV" in captured["prompt"]
+    assert "Do not shorten the CV" in captured["prompt"]
+    assert "Do not remove professional information" in captured["prompt"]
+    assert "Do not judge whether an experience is relevant or not" in captured["prompt"]
+    assert "Preserve detailed bullet points instead of replacing them with short summaries" in captured["prompt"]
+    assert "Company names, client names, technologies, project descriptions, dates, roles, education, and professional achievements must be preserved" in captured["prompt"]
+    assert "Do not write comments such as" in captured["prompt"]
+
+
+def test_anonymize_cv_text_preserves_professional_entries_and_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
+        assert "Senior Developer at ExampleBank" in prompt
+        assert "Teaching Assistant at Example University" in prompt
+        return (
+            "**Personal data**\n"
+            "• Lugano\n"
+            "**Experience**\n"
+            "• Senior Developer at ExampleBank — 2021-2024\n"
+            "• Built payment APIs with Python, FastAPI, PostgreSQL, Docker, and Kubernetes.\n"
+            "• Led migration of legacy batch jobs to asynchronous services and reduced processing time.\n"
+            "• Teaching Assistant at Example University — 2019-2020\n"
+            "• Delivered Python labs, reviewed assignments, and supported student projects.\n"
+            "**Education**\n"
+            "• MSc Computer Science — Example University — 2020\n"
+            "**Skills**\n"
+            "• Core Competencies: architecture, mentoring, stakeholder management\n"
+            "• Technical Skills: Python, FastAPI, PostgreSQL, Docker, Kubernetes\n"
+            "• Stack: Linux, Git, CI/CD, REST APIs\n"
+            "**Certifications**\n"
+            "• Not specified\n"
+            "**Hobby**\n"
+            "• Not specified"
+        )
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    result = asyncio.run(
+        cv_anonymization.anonymize_cv_text(
+            "Mario Rossi\n"
+            "Senior Developer at ExampleBank — 2021-2024\n"
+            "Built payment APIs with Python, FastAPI, PostgreSQL, Docker, and Kubernetes.\n"
+            "Led migration of legacy batch jobs to asynchronous services and reduced processing time.\n"
+            "Teaching Assistant at Example University — 2019-2020\n"
+            "Delivered Python labs, reviewed assignments, and supported student projects.\n"
+            "MSc Computer Science — Example University — 2020\n"
+            "Core Competencies: architecture, mentoring, stakeholder management\n"
+            "Technical Skills: Python, FastAPI, PostgreSQL, Docker, Kubernetes\n"
+            "Stack: Linux, Git, CI/CD, REST APIs"
+        )
+    )
+
+    assert "Senior Developer at ExampleBank" in result
+    assert "Teaching Assistant at Example University" in result
+    assert "Built payment APIs with Python, FastAPI, PostgreSQL, Docker, and Kubernetes." in result
+    assert "Led migration of legacy batch jobs to asynchronous services and reduced processing time." in result
+    assert "Delivered Python labs, reviewed assignments, and supported student projects." in result
+    assert "Core Competencies: architecture, mentoring, stakeholder management" in result
+    assert "Technical Skills: Python, FastAPI, PostgreSQL, Docker, Kubernetes" in result
+    assert "Stack: Linux, Git, CI/CD, REST APIs" in result
+    assert "removed this section because" not in result.lower()
+    for heading in EXPECTED_SECTION_HEADINGS:
+        assert result.count(heading) == 1
 
 
 def test_anonymize_cv_text_removes_introductory_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,6 +301,16 @@ def test_normalize_cv_sections_outputs_all_sections_exactly_once() -> None:
         assert result.count(heading) == 1
     assert "• Python" in result
     assert "• FastAPI" in result
+
+
+def test_normalize_cv_sections_does_not_dedupe_repeated_professional_content() -> None:
+    result = cv_anonymization.normalize_cv_sections(
+        "**Experience**\n"
+        "• Built REST APIs\n"
+        "• Built REST APIs"
+    )
+
+    assert result.count("• Built REST APIs") == 2
 
 
 def test_cv_anonymization_has_no_regex_or_keyword_section_extraction() -> None:
@@ -574,3 +646,26 @@ def test_write_text_overlay_multipage_continues_instead_of_repeating_page_one(tm
     assert combined_text.count("Skills") == 1
     assert combined_text.count("Certifications") == 1
     assert combined_text.index("Skills") < combined_text.index("Certifications")
+
+
+def test_render_anonymized_cv_pdf_rejects_accidentally_duplicated_pages(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output_path = tmp_path / "duplicated-output.pdf"
+
+    def fake_write_text_overlay(text: str, overlay_path: Path, width: float, height: float) -> None:
+        from reportlab.pdfgen import canvas
+
+        pdf = canvas.Canvas(str(overlay_path), pagesize=(width, height))
+        for _ in range(2):
+            pdf.drawString(72, 720, "Repeated rendered CV content")
+            pdf.showPage()
+        pdf.save()
+
+    monkeypatch.setattr(cv_pdf_rendering, "_write_text_overlay", fake_write_text_overlay)
+
+    with pytest.raises(ToolError, match="duplicated page content"):
+        cv_pdf_rendering.render_anonymized_cv_pdf(
+            "**Experience**\n• Repeated rendered CV content",
+            output_path,
+        )
