@@ -48,6 +48,7 @@ def render_anonymized_cv_pdf(
         logger.debug("CV PDF generated content page count: %s", len(overlay_pages))
         if not overlay_pages:
             raise ToolError("Generated anonymized CV overlay does not contain any pages.")
+        _validate_pdf_has_no_duplicated_pages(overlay_path)
 
         writer = PdfWriter()
         for page_number, overlay_page in enumerate(overlay_pages, start=1):
@@ -62,7 +63,6 @@ def render_anonymized_cv_pdf(
         logger.debug("CV PDF final output page count before saving: %s", final_output_page_count)
         with output_path.open("wb") as output_file:
             writer.write(output_file)
-        _validate_pdf_has_no_duplicated_pages(output_path)
         return output_path
     except ToolError:
         raise
@@ -210,7 +210,13 @@ def _validate_pdf_has_no_duplicated_pages(pdf_path: Path) -> None:
     seen_pages: dict[str, int] = {}
     for page_index, page in enumerate(reader.pages, start=1):
         page_text = " ".join((page.extract_text() or "").split())
-        if not page_text:
+        logger.debug(
+            "PDF duplicate-page validation page %s: extracted text length=%s, preview=%r",
+            page_index,
+            len(page_text),
+            page_text[:200],
+        )
+        if len(page_text) < 100:
             continue
         first_seen_page = seen_pages.get(page_text)
         if first_seen_page is not None:

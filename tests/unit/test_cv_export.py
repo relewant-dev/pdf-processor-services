@@ -515,8 +515,9 @@ def test_validate_pdf_has_no_duplicated_pages_rejects_identical_page_text(tmp_pa
 
     duplicate_pdf = tmp_path / "duplicate-pages.pdf"
     pdf = canvas.Canvas(str(duplicate_pdf), pagesize=(595, 842))
+    repeated_text = "Repeated anonymized CV page " * 8
     for _ in range(2):
-        pdf.drawString(72, 720, "Repeated anonymized CV page")
+        pdf.drawString(72, 720, repeated_text)
         pdf.showPage()
     pdf.save()
 
@@ -732,6 +733,45 @@ def test_write_text_overlay_multipage_continues_instead_of_repeating_page_one(tm
     assert combined_text.index("Skills") < combined_text.index("Certifications")
 
 
+
+def test_render_anonymized_cv_pdf_validates_overlay_before_merging_template(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from reportlab.pdfgen import canvas
+
+    template_path = tmp_path / "template.pdf"
+    template = canvas.Canvas(str(template_path), pagesize=(595, 842))
+    template.drawString(72, 800, "ReleWant letterhead repeated on every rendered page " * 4)
+    template.save()
+    output_path = tmp_path / "letterhead-output.pdf"
+    validated_paths: list[Path] = []
+
+    def fake_write_text_overlay(text: str, overlay_path: Path, width: float, height: float) -> None:
+        pdf = canvas.Canvas(str(overlay_path), pagesize=(width, height))
+        pdf.drawString(72, 720, "First generated CV content page with unique experience details.")
+        pdf.showPage()
+        pdf.drawString(72, 720, "Second generated CV content page with unique education details.")
+        pdf.showPage()
+        pdf.save()
+
+    original_validate = cv_pdf_rendering._validate_pdf_has_no_duplicated_pages
+
+    def spy_validate(pdf_path: Path) -> None:
+        validated_paths.append(pdf_path)
+        original_validate(pdf_path)
+
+    monkeypatch.setattr(cv_pdf_rendering, "_write_text_overlay", fake_write_text_overlay)
+    monkeypatch.setattr(cv_pdf_rendering, "_validate_pdf_has_no_duplicated_pages", spy_validate)
+
+    cv_pdf_rendering.render_anonymized_cv_pdf(
+        "**Experience**\n• Generated content",
+        output_path,
+        template_path=template_path,
+    )
+
+    assert output_path.exists()
+    assert validated_paths == [output_path.with_suffix(".overlay.pdf")]
+
 def test_render_anonymized_cv_pdf_rejects_accidentally_duplicated_pages(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -741,8 +781,9 @@ def test_render_anonymized_cv_pdf_rejects_accidentally_duplicated_pages(
         from reportlab.pdfgen import canvas
 
         pdf = canvas.Canvas(str(overlay_path), pagesize=(width, height))
+        repeated_text = "Repeated rendered CV content " * 8
         for _ in range(2):
-            pdf.drawString(72, 720, "Repeated rendered CV content")
+            pdf.drawString(72, 720, repeated_text)
             pdf.showPage()
         pdf.save()
 
