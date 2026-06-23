@@ -10,6 +10,16 @@ from starlette.datastructures import Headers, UploadFile
 from services import cv_anonymization, cv_extraction, cv_pdf_rendering
 
 
+EXPECTED_SECTION_HEADINGS = [
+    "**Personal data**",
+    "**Experience**",
+    "**Education**",
+    "**Skills**",
+    "**Certifications**",
+    "**Hobby**",
+]
+
+
 def make_upload(
     filename: str = "cv.pdf",
     content_type: str = "application/pdf",
@@ -28,13 +38,13 @@ def test_extract_cv_text_from_upload_writes_pdf_and_extracts_text(monkeypatch: p
     def fake_extract_pdf_text(file_path: str) -> str:
         captured["file_path"] = file_path
         captured["exists_during_extraction"] = Path(file_path).is_file()
-        return "Gabriele Di Somma\nSenior Developer"
+        return "Gabriele\nSenior Developer"
 
     monkeypatch.setattr(cv_extraction, "extract_pdf_text", fake_extract_pdf_text)
 
     result = asyncio.run(cv_extraction.extract_cv_text_from_upload(make_upload()))
 
-    assert result == "Gabriele Di Somma\nSenior Developer"
+    assert result == "Gabriele\nSenior Developer"
     assert captured["file_path"].endswith("cv-upload.pdf")
     assert captured["exists_during_extraction"] is True
 
@@ -50,8 +60,8 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
         captured["prompt"] = prompt
         return (
-            "**Anagraphical data**\n"
-            "• Gabriele Di Somma\n"
+            "**Personal data**\n"
+            "• Gabriele\n"
             "• Lugano\n"
             "**Experience**\n"
             "• Senior Developer"
@@ -61,16 +71,29 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
 
     result = asyncio.run(
         cv_anonymization.anonymize_cv_text(
-            "Gabriele Di Somma\ngabriele@example.com\nVia Roma 10, Lugano"
+            "Gabriele\ngabriele@example.com\nVia Roma 10, Lugano"
         )
     )
 
     assert result == (
-        "**Anagraphical data**\n"
-        "• Gabriele Di Somma\n"
+        "**Personal data**\n"
+        "• Gabriele\n"
         "• Lugano\n"
+        "\n"
         "**Experience**\n"
-        "• Senior Developer"
+        "• Senior Developer\n"
+        "\n"
+        "**Education**\n"
+        "• Not specified\n"
+        "\n"
+        "**Skills**\n"
+        "• Not specified\n"
+        "\n"
+        "**Certifications**\n"
+        "• Not specified\n"
+        "\n"
+        "**Hobby**\n"
+        "• Not specified"
     )
     assert "Keep only the candidate first/given name" in captured["prompt"]
     assert "Remove phone numbers" in captured["prompt"]
@@ -79,7 +102,7 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert "Remove house numbers" in captured["prompt"]
     assert "Remove postal codes" in captured["prompt"]
     assert "Keep only the city" in captured["prompt"]
-    assert "Anagraphical data" in captured["prompt"]
+    assert "Personal data" in captured["prompt"]
     assert "Experience" in captured["prompt"]
     assert "Education" in captured["prompt"]
     assert "Skills" in captured["prompt"]
@@ -94,13 +117,93 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
 
 def test_anonymize_cv_text_removes_introductory_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
-        return "Here is the anonymized CV content for PDF export:\nLugano\nSenior Developer"
+        return "Here is the anonymized CV content for PDF export:\n**Personal data**\n• Lugano"
 
     monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
 
     result = asyncio.run(cv_anonymization.anonymize_cv_text("Gabriele Di Somma"))
 
-    assert result == "Lugano\nSenior Developer"
+    assert result == (
+        "**Personal data**\n"
+        "• Lugano\n"
+        "\n"
+        "**Experience**\n"
+        "• Not specified\n"
+        "\n"
+        "**Education**\n"
+        "• Not specified\n"
+        "\n"
+        "**Skills**\n"
+        "• Not specified\n"
+        "\n"
+        "**Certifications**\n"
+        "• Not specified\n"
+        "\n"
+        "**Hobby**\n"
+        "• Not specified"
+    )
+
+
+def test_normalize_cv_sections_keeps_all_sections_when_present() -> None:
+    text = (
+        "**Personal data**\n"
+        "• Ada\n"
+        "**Experience**\n"
+        "• Backend Engineer at ExampleCo\n"
+        "**Education**\n"
+        "• MSc Computer Science\n"
+        "**Skills**\n"
+        "• Python\n"
+        "**Certifications**\n"
+        "• AWS Cloud Practitioner\n"
+        "**Hobby**\n"
+        "• Hiking"
+    )
+
+    result = cv_anonymization.normalize_cv_sections(text)
+
+    assert [line for line in result.splitlines() if line.startswith("**")] == EXPECTED_SECTION_HEADINGS
+    assert "• Backend Engineer at ExampleCo" in result
+    assert "• MSc Computer Science" in result
+    assert "• Python" in result
+    assert "• AWS Cloud Practitioner" in result
+    assert "• Hiking" in result
+
+
+def test_normalize_cv_sections_restores_missing_sections() -> None:
+    result = cv_anonymization.normalize_cv_sections(
+        "**Personal data**\n• Ada\n**Experience**\n• Backend Engineer\n**Skills**\n• Python"
+    )
+
+    assert [line for line in result.splitlines() if line.startswith("**")] == EXPECTED_SECTION_HEADINGS
+    assert result.count("**Education**") == 1
+    assert result.count("**Certifications**") == 1
+    assert result.count("**Hobby**") == 1
+    assert result.count("• Not specified") == 3
+
+
+def test_normalize_cv_sections_maps_alternative_section_titles() -> None:
+    result = cv_anonymization.normalize_cv_sections(
+        "Contact\n"
+        "• Ada\n"
+        "Work History\n"
+        "• Platform Engineer\n"
+        "Academic Background\n"
+        "• BSc Informatics\n"
+        "Technical Skills\n"
+        "• Python\n"
+        "Certificates\n"
+        "• Kubernetes Administrator\n"
+        "Interests\n"
+        "• Climbing"
+    )
+
+    assert [line for line in result.splitlines() if line.startswith("**")] == EXPECTED_SECTION_HEADINGS
+    assert result.index("• Platform Engineer") < result.index("**Education**")
+    assert "• BSc Informatics" in result
+    assert "• Python" in result
+    assert "• Kubernetes Administrator" in result
+    assert "• Climbing" in result
 
 
 def test_anonymize_cv_text_rejects_empty_ollama_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,7 +275,7 @@ def test_render_anonymized_cv_pdf_one_page_cv_is_rendered_once(tmp_path: Path) -
     output_path = tmp_path / "anonymized-cv.pdf"
     text = (
         "Here is the anonymized CV content for PDF export:\n"
-        "**Anagraphical data**\n"
+        "**Personal data**\n"
         "• Gabriele\n"
         "• Lugano\n"
         "**Experience**\n"
@@ -196,7 +299,7 @@ def test_render_anonymized_cv_pdf_one_page_cv_is_rendered_once(tmp_path: Path) -
 
     assert len(page_texts) == 1
     assert "Here is the anonymized CV content for PDF export:" not in full_text
-    assert full_text.count("Anagraphical data") == 1
+    assert full_text.count("Personal data") == 1
     assert full_text.count("Experience") == 1
     assert full_text.count("Senior Developer") == 1
     assert full_text.count("Skills") == 1
@@ -353,7 +456,7 @@ def test_write_text_overlay_single_page_does_not_duplicate_content(tmp_path: Pat
 
     overlay_path = tmp_path / "single-page-overlay.pdf"
     text = (
-        "**Anagraphical data**\n"
+        "**Personal data**\n"
         "• Candidate\n"
         "**Experience**\n"
         "• Developer\n"
