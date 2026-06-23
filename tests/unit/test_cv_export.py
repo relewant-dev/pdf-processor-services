@@ -182,28 +182,72 @@ def test_normalize_cv_sections_restores_missing_sections() -> None:
     assert result.count("• Not specified") == 3
 
 
-def test_normalize_cv_sections_maps_alternative_section_titles() -> None:
+def test_normalize_cv_sections_does_not_assign_alternative_headings_after_ollama() -> None:
     result = cv_anonymization.normalize_cv_sections(
         "Contact\n"
         "• Ada\n"
         "Work History\n"
         "• Platform Engineer\n"
-        "Academic Background\n"
-        "• BSc Informatics\n"
         "Technical Skills\n"
-        "• Python\n"
-        "Certificates\n"
-        "• Kubernetes Administrator\n"
-        "Interests\n"
-        "• Climbing"
+        "• Python"
     )
 
     assert [line for line in result.splitlines() if line.startswith("**")] == EXPECTED_SECTION_HEADINGS
-    assert result.index("• Platform Engineer") < result.index("**Education**")
-    assert "• BSc Informatics" in result
+    assert "• Ada" not in result
+    assert "• Platform Engineer" not in result
+    assert "• Python" not in result
+    assert result.count("• Not specified") == 6
+
+
+def test_normalize_cv_sections_keeps_skills_when_ollama_returns_skill_content() -> None:
+    result = cv_anonymization.normalize_cv_sections(
+        "**Personal data**\n"
+        "• Ada\n"
+        "**Skills**\n"
+        "• Python, FastAPI, Docker"
+    )
+
+    assert "**Skills**\n• Python, FastAPI, Docker" in result
+
+
+def test_normalize_cv_sections_replaces_empty_sections_with_not_specified() -> None:
+    result = cv_anonymization.normalize_cv_sections(
+        "**Personal data**\n"
+        "**Experience**\n"
+        "•   \n"
+        "**Skills**\n"
+        "• Python"
+    )
+
+    assert "**Personal data**\n• Not specified" in result
+    assert "**Experience**\n• Not specified" in result
+    assert "**Skills**\n• Python" in result
+
+
+def test_normalize_cv_sections_outputs_all_sections_exactly_once() -> None:
+    result = cv_anonymization.normalize_cv_sections(
+        "**Skills**\n"
+        "• Python\n"
+        "**Skills**\n"
+        "• FastAPI\n"
+        "**Experience**\n"
+        "• Developer"
+    )
+
+    assert [line for line in result.splitlines() if line.startswith("**")] == EXPECTED_SECTION_HEADINGS
+    for heading in EXPECTED_SECTION_HEADINGS:
+        assert result.count(heading) == 1
     assert "• Python" in result
-    assert "• Kubernetes Administrator" in result
-    assert "• Climbing" in result
+    assert "• FastAPI" in result
+
+
+def test_cv_anonymization_has_no_regex_or_keyword_section_extraction() -> None:
+    source = Path(cv_anonymization.__file__).read_text()
+
+    assert "import re" not in source
+    assert "_SECTION_ALIASES" not in source
+    for forbidden in ("Core Competencies", "Technical Skills", "Stack", "Technologies", "Tools", "Frameworks", "Methodologies"):
+        assert forbidden not in source.replace(cv_anonymization.CV_ANONYMIZATION_PROMPT_TEMPLATE, "")
 
 
 def test_anonymize_cv_text_rejects_empty_ollama_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,6 +279,9 @@ def test_render_anonymized_cv_pdf_writes_output_with_template(monkeypatch: pytes
 
         def merge_page(self, other: object) -> None:
             self.other = other
+
+        def extract_text(self) -> str:
+            return "M. R. Engineer"
 
     class FakeReader:
         def __init__(self, path: str) -> None:
@@ -303,6 +350,22 @@ def test_render_anonymized_cv_pdf_one_page_cv_is_rendered_once(tmp_path: Path) -
     assert full_text.count("Experience") == 1
     assert full_text.count("Senior Developer") == 1
     assert full_text.count("Skills") == 1
+
+
+
+
+def test_validate_pdf_has_no_duplicated_pages_rejects_identical_page_text(tmp_path: Path) -> None:
+    from reportlab.pdfgen import canvas
+
+    duplicate_pdf = tmp_path / "duplicate-pages.pdf"
+    pdf = canvas.Canvas(str(duplicate_pdf), pagesize=(595, 842))
+    for _ in range(2):
+        pdf.drawString(72, 720, "Repeated anonymized CV page")
+        pdf.showPage()
+    pdf.save()
+
+    with pytest.raises(ToolError, match="duplicated page content"):
+        cv_pdf_rendering._validate_pdf_has_no_duplicated_pages(duplicate_pdf)
 
 
 def test_anonymized_cv_endpoint_anonymizes_once_and_renders_once(monkeypatch: pytest.MonkeyPatch) -> None:
