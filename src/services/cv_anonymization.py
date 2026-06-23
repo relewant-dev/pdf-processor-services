@@ -15,6 +15,11 @@ REQUIRED_CV_SECTIONS = (
 
 CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize and format CV content for PDF export.
 
+Primary objective:
+- This workflow must not rewrite, shorten, summarize, evaluate relevance, or remove professional content.
+- Your only tasks are to anonymize private/personal identifying data and reorganize the remaining CV text into the required sections.
+- Preserve as much original professional information as possible, including the original level of detail and bullet granularity.
+
 Critical source-of-truth rule:
 - After this PDF text has been converted to plain text, you are the only component allowed to classify CV content into sections.
 - All section classification must be based only on the converted CV text below.
@@ -23,17 +28,19 @@ Critical source-of-truth rule:
 - Do not invent information.
 
 Privacy rules:
-- Keep only the candidate first/given name; remove surnames/family names.
+- Only anonymize personal identifying data such as name, email, phone, LinkedIn, address, precise personal location, and other private identifiers.
+- Keep only the candidate first/given name when a name is present; remove surnames/family names.
 - Remove phone numbers.
 - Remove email addresses.
+- Remove LinkedIn and personal profile URLs.
 - Remove street addresses.
 - Remove street names.
 - Remove house numbers.
 - Remove postal codes.
 - Keep only the city from any address, for example "Via Roma 10, 6900 Lugano, Switzerland" becomes "Lugano".
-- Preserve professional information while anonymizing personal identifying data.
-- Preserve all non-sensitive professional information: professional summary, experience, job titles, employers, dates, responsibilities, achievements, education, skills, certifications, languages, projects, technical competencies, and hobbies.
-- Anonymize personal/sensitive data only. Do not remove professional content unless it contains personal identifying data.
+- Company names, client names, technologies, project descriptions, dates, roles, education, and professional achievements must be preserved unless the application explicitly requires them to be anonymized.
+- Preserve all non-sensitive professional information: professional summary, all work experiences, projects, responsibilities, achievements, teaching/training activities, technical stacks, education, skills, certifications, languages, technical competencies, and hobbies.
+- Anonymize personal/sensitive data only. Do not remove professional content unless that exact content contains personal identifying data.
 
 Classification rules:
 - Classify all CV content into the most appropriate required section yourself, using only the converted CV text.
@@ -46,11 +53,24 @@ Classification rules:
   6. Hobby
 - Skills may appear under headings such as Core Competencies, Technical Skills, Stack, Technologies, Tools, Frameworks, Methodologies, or inside experience descriptions.
 - If skill-related information exists anywhere in the CV text, the Skills section must contain it.
+- If information belongs to skills, place it in Skills.
+- If information belongs to experience, place it in Experience.
+- If information belongs to education, place it in Education.
 - Keep certifications and licenses in Certifications, not Education or Skills.
 - Keep hobbies, interests, and extracurricular non-professional activities in Hobby.
 - Do not invent information.
 - Do not use assumptions.
 - Do not infer content outside the given CV text.
+
+Professional preservation rules:
+- Do not summarize the CV.
+- Do not shorten the CV.
+- Do not remove professional information.
+- Do not judge whether an experience is relevant or not.
+- Do not delete jobs, projects, bullet points, skills, education, training, languages, or technical stacks unless the specific text contains private data.
+- Keep all work experiences, projects, responsibilities, achievements, teaching/training activities, technical stacks, education, languages, and skills.
+- Preserve detailed bullet points instead of replacing them with short summaries.
+- Keep technical skills from Core Competencies, Technical Skills, Stack, Technologies, Tools, Frameworks, Methodologies, and similar source lines.
 
 Formatting rules:
 - You must output exactly these sections and in this order:
@@ -73,6 +93,7 @@ Output rules:
 - Return only the formatted anonymized CV content.
 - Do not start with an introductory sentence such as "Here is the anonymized CV content for PDF export:".
 - Do not add introductions, explanations, comments, notes, markdown fences, or extra text.
+- Do not write comments such as "I removed this section because..." or any explanation of removed content.
 
 CV content:
 {cv_text}
@@ -115,7 +136,7 @@ def normalize_cv_sections(anonymized_text: str) -> str:
         if normalized_lines:
             normalized_lines.append("")
         normalized_lines.append(f"**{section}**")
-        content = _dedupe_content(section_content[section])
+        content = section_content[section]
         if not content or _content_is_empty(content):
             normalized_lines.append("• Not specified")
             continue
@@ -153,18 +174,6 @@ def _normalize_content_line(line: str) -> str:
 
 def _content_is_empty(lines: list[str]) -> bool:
     return all(line.removeprefix("•").strip() == "" for line in lines)
-
-
-def _dedupe_content(lines: list[str]) -> list[str]:
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for line in lines:
-        key = line.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(line)
-    return deduped
 
 
 def _remove_introductory_sentence(anonymized_text: str) -> str:
