@@ -62,6 +62,7 @@ def render_anonymized_cv_pdf(
         logger.debug("CV PDF final output page count before saving: %s", final_output_page_count)
         with output_path.open("wb") as output_file:
             writer.write(output_file)
+        _validate_pdf_has_no_duplicated_pages(output_path)
         return output_path
     except ToolError:
         raise
@@ -199,3 +200,22 @@ def _round_bullet_text(line: str) -> str | None:
     if not stripped_line or stripped_line[0] != ROUND_BULLET:
         return None
     return stripped_line[1:].strip()
+
+
+def _validate_pdf_has_no_duplicated_pages(pdf_path: Path) -> None:
+    """Reject generated PDFs that contain duplicate non-empty extracted page text."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(pdf_path))
+    seen_pages: dict[str, int] = {}
+    for page_index, page in enumerate(reader.pages, start=1):
+        page_text = " ".join((page.extract_text() or "").split())
+        if not page_text:
+            continue
+        first_seen_page = seen_pages.get(page_text)
+        if first_seen_page is not None:
+            raise ToolError(
+                "Generated anonymized CV PDF contains duplicated page content "
+                f"on pages {first_seen_page} and {page_index}."
+            )
+        seen_pages[page_text] = page_index
