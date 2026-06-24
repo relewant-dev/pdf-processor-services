@@ -9,7 +9,10 @@ from config import OLLAMA_MODEL, OLLAMA_TIMEOUT_SECONDS, OLLAMA_URL
 
 
 async def chat_with_ollama(
-    prompt: str, *, response_format: dict[str, Any] | str | None = None
+    prompt: str,
+    *,
+    response_format: dict[str, Any] | str | None = None,
+    options: dict[str, Any] | None = None,
 ) -> str:
     if not prompt.strip():
         raise ToolError("Prompt must not be empty.")
@@ -21,6 +24,8 @@ async def chat_with_ollama(
     }
     if response_format is not None:
         payload["format"] = response_format
+    if options is not None:
+        payload["options"] = options
 
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:

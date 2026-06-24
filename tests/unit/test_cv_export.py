@@ -47,15 +47,11 @@ def test_extract_cv_text_from_upload_rejects_invalid_pdf() -> None:
 def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
-    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
+    async def fake_chat_with_ollama(prompt: str, **kwargs: object) -> str:
         captured["prompt"] = prompt
-        return (
-            "**Anagraphical data**\n"
-            "• Gabriele Di Somma\n"
-            "• Lugano\n"
-            "**Experience**\n"
-            "• Senior Developer"
-        )
+        captured["response_format"] = str(kwargs.get("response_format"))
+        captured["options"] = str(kwargs.get("options"))
+        return '{"anagraphical_data":["Gabriele","Lugano"],"experience":["Senior Developer"],"education":["Not specified"],"skills":["Not specified"],"certifications":["Not specified"],"hobby":["Not specified"]}'
 
     monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
 
@@ -67,10 +63,18 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
 
     assert result == (
         "**Anagraphical data**\n"
-        "• Gabriele Di Somma\n"
-        "• Lugano\n"
+        "• Gabriele\n"
+        "• Lugano\n\n"
         "**Experience**\n"
-        "• Senior Developer"
+        "• Senior Developer\n\n"
+        "**Education**\n"
+        "• Not specified\n\n"
+        "**Skills**\n"
+        "• Not specified\n\n"
+        "**Certifications**\n"
+        "• Not specified\n\n"
+        "**Hobby**\n"
+        "• Not specified"
     )
     assert "Keep only the candidate first/given name" in captured["prompt"]
     assert "Remove phone numbers" in captured["prompt"]
@@ -79,26 +83,23 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
     assert "Remove house numbers" in captured["prompt"]
     assert "Remove postal codes" in captured["prompt"]
     assert "Keep only the city" in captured["prompt"]
-    assert "Anagraphical data" in captured["prompt"]
-    assert "Experience" in captured["prompt"]
-    assert "Education" in captured["prompt"]
-    assert "Skills" in captured["prompt"]
-    assert "Certifications" in captured["prompt"]
-    assert "Hobby" in captured["prompt"]
-    assert "Section titles must be bold in the exported PDF" in captured["prompt"]
-    assert "Use only round bullet points" in captured["prompt"]
-    assert "never use square bullet points" in captured["prompt"]
-    assert "Return only the formatted anonymized CV content" in captured["prompt"]
-    assert "Do not start with an introductory sentence" in captured["prompt"]
+    assert "anagraphical_data" in captured["prompt"]
+    assert "experience" in captured["prompt"]
+    assert "education" in captured["prompt"]
+    assert "skills" in captured["prompt"]
+    assert "certifications" in captured["prompt"]
+    assert "hobby" in captured["prompt"]
+    assert "Return only valid JSON" in captured["prompt"]
+    assert "Classify all remaining CV information" in captured["prompt"]
+    assert "Do not summarize professional content" in captured["prompt"]
+    assert "response_format" in captured
+    assert "temperature" in captured["options"]
 
 
-def test_anonymize_cv_text_removes_introductory_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
-        return "Here is the anonymized CV content for PDF export:\nLugano\nSenior Developer"
-
-    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
-
-    result = asyncio.run(cv_anonymization.anonymize_cv_text("Gabriele Di Somma"))
+def test_remove_introductory_sentence_helper_removes_legacy_intro() -> None:
+    result = cv_anonymization._remove_introductory_sentence(
+        "Here is the anonymized CV content for PDF export:\nLugano\nSenior Developer"
+    )
 
     assert result == "Lugano\nSenior Developer"
 
@@ -408,3 +409,118 @@ def test_write_text_overlay_multipage_continues_instead_of_repeating_page_one(tm
     assert combined_text.count("Skills") == 1
     assert combined_text.count("Certifications") == 1
     assert combined_text.index("Skills") < combined_text.index("Certifications")
+
+
+def test_cv_json_with_experience_must_not_return_not_specified() -> None:
+    response = '{"anagraphical_data":["Gabriele"],"experience":["Not specified"],"education":["Not specified"],"skills":["Not specified"],"certifications":["Not specified"],"hobby":["Not specified"]}'
+
+    with pytest.raises(ToolError, match="omitted source experience"):
+        cv_anonymization._parse_and_validate_cv_json(response, "Experience: Senior Developer at Example")
+
+
+def test_cv_json_with_skills_must_not_return_not_specified() -> None:
+    response = '{"anagraphical_data":["Gabriele"],"experience":["Not specified"],"education":["Not specified"],"skills":["Not specified"],"certifications":["Not specified"],"hobby":["Not specified"]}'
+
+    with pytest.raises(ToolError, match="omitted source skills"):
+        cv_anonymization._parse_and_validate_cv_json(response, "Skills: Python, Docker, SQL")
+
+
+def test_cv_json_with_education_must_not_return_not_specified() -> None:
+    response = '{"anagraphical_data":["Gabriele"],"experience":["Not specified"],"education":["Not specified"],"skills":["Not specified"],"certifications":["Not specified"],"hobby":["Not specified"]}'
+
+    with pytest.raises(ToolError, match="omitted source education"):
+        cv_anonymization._parse_and_validate_cv_json(response, "Education: Bachelor degree at University")
+
+
+def test_anonymize_cv_text_formats_valid_json_and_defaults_missing_hobby(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_chat_with_ollama(prompt: str, **kwargs: object) -> str:
+        assert kwargs["response_format"] == cv_anonymization.OLLAMA_JSON_FORMAT
+        assert kwargs["options"] == {"temperature": 0}
+        return '{"anagraphical_data":["Gabriele","Lugano"],"experience":["Senior Developer"],"education":["University"],"skills":["Python"],"certifications":["Not specified"],"hobby":["Not specified"]}'
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    result = asyncio.run(cv_anonymization.anonymize_cv_text("Experience: Senior Developer\nEducation: University\nSkills: Python"))
+
+    for section in ("Anagraphical data", "Experience", "Education", "Skills", "Certifications", "Hobby"):
+        assert result.count(f"**{section}**") == 1
+    assert "• Not specified" in result
+    assert "• Senior Developer" in result
+
+
+def test_anonymize_cv_text_retries_once_with_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = iter([
+        "not json",
+        '{"anagraphical_data":["Gabriele"],"experience":["Developer"],"education":["Not specified"],"skills":["Python"],"certifications":["Not specified"],"hobby":["Not specified"]}',
+    ])
+    prompts: list[str] = []
+
+    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    result = asyncio.run(cv_anonymization.anonymize_cv_text("Experience: Developer\nSkills: Python"))
+
+    assert "Repair this anonymized CV response" in prompts[1]
+    assert result.count("**Experience**") == 1
+
+
+def test_deduplicate_overlay_pages_compares_normalized_text() -> None:
+    class Page:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def extract_text(self) -> str:
+            return self.text
+
+    first = Page("Experience\nDeveloper")
+    duplicate = Page("  Experience   Developer  ")
+    second = Page("Skills\nPython")
+
+    assert cv_pdf_rendering._deduplicate_overlay_pages([first, duplicate, second]) == [first, second]
+
+
+def test_rendered_pdf_does_not_contain_duplicated_content_pages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    template_path = tmp_path / "template.pdf"
+    template_path.write_bytes(b"template")
+    output_path = tmp_path / "out.pdf"
+
+    class FakePage:
+        mediabox = SimpleNamespace(width=595, height=842)
+
+        def __init__(self, text: str = "") -> None:
+            self.text = text
+
+        def extract_text(self) -> str:
+            return self.text
+
+        def merge_page(self, other: object) -> None:
+            self.text = other.extract_text()
+
+    class FakeReader:
+        def __init__(self, path: str) -> None:
+            if path.endswith("overlay.pdf"):
+                self.pages = [FakePage("Experience\nDeveloper"), FakePage(" Experience Developer ")]
+            else:
+                self.pages = [FakePage("Template")]
+
+    class FakeWriter:
+        def __init__(self) -> None:
+            self.pages: list[FakePage] = []
+
+        def add_page(self, page: FakePage) -> None:
+            self.pages.append(page)
+
+        def write(self, file_obj: object) -> None:
+            file_obj.write(str(len(self.pages)).encode())
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pypdf", SimpleNamespace(PdfReader=FakeReader, PdfWriter=FakeWriter))
+    monkeypatch.setattr(cv_pdf_rendering, "_write_text_overlay", lambda text, overlay_path, width, height: overlay_path.write_bytes(b"overlay"))
+
+    cv_pdf_rendering.render_anonymized_cv_pdf("**Experience**\n• Developer", output_path, template_path=template_path)
+
+    assert output_path.read_bytes() == b"1"
