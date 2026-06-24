@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from fastmcp.exceptions import ToolError
 
@@ -15,6 +14,7 @@ REQUIRED_CV_JSON_KEYS = (
     "certifications",
     "hobby",
 )
+
 SECTION_TITLES = {
     "anagraphical_data": "Anagraphical data",
     "experience": "Experience",
@@ -23,7 +23,6 @@ SECTION_TITLES = {
     "certifications": "Certifications",
     "hobby": "Hobby",
 }
-NOT_SPECIFIED = "Not specified"
 
 CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize CV content for PDF export and return structured JSON only.
 
@@ -86,23 +85,29 @@ Invalid response:
 
 OLLAMA_JSON_FORMAT = {
     "type": "object",
-    "properties": {key: {"type": "array", "items": {"type": "string"}} for key in REQUIRED_CV_JSON_KEYS},
+    "properties": {
+        key: {"type": "array", "items": {"type": "string"}}
+        for key in REQUIRED_CV_JSON_KEYS
+    },
 }
 
 
 async def anonymize_cv_text(cv_text: str) -> str:
     cleaned_text = cv_text.strip()
+
     if not cleaned_text:
         raise ToolError("Extracted CV text is empty and cannot be anonymized.")
 
     prompt = CV_ANONYMIZATION_PROMPT_TEMPLATE.format(cv_text=cleaned_text)
+
     response = await chat_with_ollama(
         prompt,
         response_format=OLLAMA_JSON_FORMAT,
         options={"temperature": 0},
     )
+
     try:
-        cv_json = _parse_and_validate_cv_json(response, cleaned_text)
+        cv_json = _parse_cv_json(response)
     except ToolError:
         repair_response = await chat_with_ollama(
             CV_JSON_REPAIR_PROMPT_TEMPLATE.format(
@@ -112,97 +117,42 @@ async def anonymize_cv_text(cv_text: str) -> str:
             response_format=OLLAMA_JSON_FORMAT,
             options={"temperature": 0},
         )
-        cv_json = _parse_and_validate_cv_json(repair_response, cleaned_text)
+        cv_json = _parse_cv_json(repair_response)
 
     return _format_cv_json_as_text(cv_json)
 
 
-def _parse_and_validate_cv_json(response: str, source_cv_text: str) -> dict[str, list[str]]:
+def _parse_cv_json(response: str) -> dict[str, list[str]]:
     stripped_response = response.strip()
+
     if not stripped_response:
-        raise ToolError("Ollama returned an empty anonymized CV response.")
+        raise ToolError("Ollama returned an empty response.")
+
     try:
         parsed = json.loads(stripped_response)
     except json.JSONDecodeError as exc:
-        raise ToolError(f"Ollama returned invalid anonymized CV JSON: {exc.msg}.") from exc
+        raise ToolError(f"Ollama returned invalid JSON: {exc.msg}.") from exc
+
     if not isinstance(parsed, dict):
-        raise ToolError("Ollama returned anonymized CV JSON with an unexpected shape.")
+        raise ToolError("Ollama returned JSON with an unexpected shape.")
 
-    extra_keys = set(parsed) - set(REQUIRED_CV_JSON_KEYS)
-    if extra_keys:
-        raise ToolError("Ollama anonymized CV JSON contains unexpected CV sections.")
-
-    validated: dict[str, list[str]] = {}
-    for key in REQUIRED_CV_JSON_KEYS:
-        value = parsed.get(key, [])
-        if not isinstance(value, list):
-            raise ToolError(f"Ollama anonymized CV JSON field '{key}' must be a list when provided.")
-        if not all(isinstance(item, str) and item.strip() for item in value):
-            raise ToolError(f"Ollama anonymized CV JSON field '{key}' must contain only non-empty strings.")
-        validated[key] = [item.strip() for item in value if not _is_not_specified_value(item)]
-
-    _validate_source_aware_sections(validated, source_cv_text)
-    return validated
-
-
-def _validate_source_aware_sections(cv_json: dict[str, list[str]], source_cv_text: str) -> None:
-    checks = {
-        "experience": _contains_experience_information,
-        "education": _contains_education_information,
-        "skills": _contains_skills_information,
+    return {
+        key: parsed.get(key, [])
+        for key in REQUIRED_CV_JSON_KEYS
     }
-    for key, detector in checks.items():
-        if detector(source_cv_text) and _is_not_specified_only(cv_json[key]):
-            raise ToolError(f"Ollama anonymized CV JSON omitted source {key} information.")
-
-
-def _contains_experience_information(text: str) -> bool:
-    return _contains_any_term(
-        text,
-        ("experience", "employment", "work history", "developer", "engineer", "manager", "consultant"),
-    )
-
-
-def _contains_education_information(text: str) -> bool:
-    return _contains_any_term(
-        text,
-        ("education", "university", "college", "degree", "bachelor", "master", "phd", "diploma"),
-    )
-
-
-def _contains_skills_information(text: str) -> bool:
-    return _contains_any_term(
-        text,
-        ("skill", "skills", "competenc", "technolog", "python", "java", "javascript", "sql", "aws", "docker"),
-    )
-
-
-def _contains_any_term(text: str, terms: tuple[str, ...]) -> bool:
-    normalized_text = text.casefold()
-    return any(term.casefold() in normalized_text for term in terms)
-
-
-def _is_not_specified_only(items: list[str]) -> bool:
-    return not items or (len(items) == 1 and _is_not_specified_value(items[0]))
-
-
-def _is_not_specified_value(item: str) -> bool:
-    return item.strip().casefold() == NOT_SPECIFIED.casefold()
 
 
 def _format_cv_json_as_text(cv_json: dict[str, list[str]]) -> str:
     sections: list[str] = []
+
     for key in REQUIRED_CV_JSON_KEYS:
-        if not cv_json[key]:
+        items = cv_json.get(key, [])
+
+        if not items:
             continue
+
         lines = [f"**{SECTION_TITLES[key]}**"]
-        lines.extend(f"• {item}" for item in cv_json[key])
+        lines.extend(f"• {item}" for item in items)
         sections.append("\n".join(lines))
+
     return "\n\n".join(sections)
-
-
-def _remove_introductory_sentence(anonymized_text: str) -> str:
-    intro = "Here is the anonymized CV content for PDF export:"
-    if anonymized_text.startswith(intro):
-        return anonymized_text.removeprefix(intro).lstrip()
-    return anonymized_text
