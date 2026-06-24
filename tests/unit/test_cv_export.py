@@ -66,15 +66,7 @@ def test_anonymize_cv_text_uses_ollama_prompt(monkeypatch: pytest.MonkeyPatch) -
         "• Gabriele\n"
         "• Lugano\n\n"
         "**Experience**\n"
-        "• Senior Developer\n\n"
-        "**Education**\n"
-        "• Not specified\n\n"
-        "**Skills**\n"
-        "• Not specified\n\n"
-        "**Certifications**\n"
-        "• Not specified\n\n"
-        "**Hobby**\n"
-        "• Not specified"
+        "• Senior Developer"
     )
     assert "Keep only the candidate first/given name" in captured["prompt"]
     assert "Remove phone numbers" in captured["prompt"]
@@ -432,7 +424,7 @@ def test_cv_json_with_education_must_not_return_not_specified() -> None:
         cv_anonymization._parse_and_validate_cv_json(response, "Education: Bachelor degree at University")
 
 
-def test_anonymize_cv_text_formats_valid_json_and_defaults_missing_hobby(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_anonymize_cv_text_formats_valid_json_and_omits_missing_sections(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_chat_with_ollama(prompt: str, **kwargs: object) -> str:
         assert kwargs["response_format"] == cv_anonymization.OLLAMA_JSON_FORMAT
         assert kwargs["options"] == {"temperature": 0}
@@ -442,10 +434,28 @@ def test_anonymize_cv_text_formats_valid_json_and_defaults_missing_hobby(monkeyp
 
     result = asyncio.run(cv_anonymization.anonymize_cv_text("Experience: Senior Developer\nEducation: University\nSkills: Python"))
 
-    for section in ("Anagraphical data", "Experience", "Education", "Skills", "Certifications", "Hobby"):
+    for section in ("Anagraphical data", "Experience", "Education", "Skills"):
         assert result.count(f"**{section}**") == 1
-    assert "• Not specified" in result
+    assert "**Certifications**" not in result
+    assert "**Hobby**" not in result
+    assert "• Not specified" not in result
     assert "• Senior Developer" in result
+
+
+def test_anonymize_cv_text_allows_omitted_and_empty_missing_sections(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_chat_with_ollama(prompt: str, **_: object) -> str:
+        return '{"anagraphical_data":["Gabriele"],"experience":["Developer"],"hobby":[]}'
+
+    monkeypatch.setattr(cv_anonymization, "chat_with_ollama", fake_chat_with_ollama)
+
+    result = asyncio.run(cv_anonymization.anonymize_cv_text("Gabriele\nExperience: Developer"))
+
+    assert "**Anagraphical data**" in result
+    assert "**Experience**" in result
+    assert "**Education**" not in result
+    assert "**Skills**" not in result
+    assert "**Certifications**" not in result
+    assert "**Hobby**" not in result
 
 
 def test_anonymize_cv_text_retries_once_with_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> None:

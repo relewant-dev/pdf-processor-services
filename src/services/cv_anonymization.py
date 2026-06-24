@@ -28,7 +28,7 @@ NOT_SPECIFIED = "Not specified"
 
 CV_ANONYMIZATION_PROMPT_TEMPLATE = """You anonymize CV content for PDF export and return structured JSON only.
 
-Return only valid JSON with exactly this schema and these six keys:
+Return only valid JSON using only these CV section keys:
 {{
   "anagraphical_data": [],
   "experience": [],
@@ -55,8 +55,8 @@ Classification and preservation rules:
 - Do not summarize professional content.
 - Do not remove professional experience, education, skills, certifications, languages, projects, technical competencies, hobbies, or professional summary.
 - Put languages, projects, technical competencies, and professional summary in the most appropriate array.
-- If a field has no content, return ["Not specified"].
-- Every value must be a non-empty array of strings.
+- If a field has no content in the source CV, omit that field or return an empty array.
+- Every included field must be an array of non-empty strings.
 
 Output rules:
 - Return only JSON.
@@ -68,7 +68,7 @@ CV content:
 
 CV_JSON_REPAIR_PROMPT_TEMPLATE = """Repair this anonymized CV response into valid JSON only.
 
-It must have exactly these six keys, each with a non-empty array of strings:
+It must use only these CV section keys, each with an array of strings:
 - anagraphical_data
 - experience
 - education
@@ -76,7 +76,7 @@ It must have exactly these six keys, each with a non-empty array of strings:
 - certifications
 - hobby
 
-If a field has no content, use ["Not specified"]. Preserve all professional content from the source CV. Continue applying privacy rules: keep only first/given name; remove surnames, phone numbers, emails, URLs, street names, house numbers, and postal codes; keep only city from addresses.
+If a field has no content in the source CV, omit that field or use an empty array. Preserve all professional content from the source CV. Continue applying privacy rules: keep only first/given name; remove surnames, phone numbers, emails, URLs, street names, house numbers, and postal codes; keep only city from addresses.
 
 Source CV content:
 {cv_text}
@@ -88,7 +88,6 @@ Invalid response:
 OLLAMA_JSON_FORMAT = {
     "type": "object",
     "properties": {key: {"type": "array", "items": {"type": "string"}} for key in REQUIRED_CV_JSON_KEYS},
-    "required": list(REQUIRED_CV_JSON_KEYS),
 }
 
 
@@ -131,18 +130,17 @@ def _parse_and_validate_cv_json(response: str, source_cv_text: str) -> dict[str,
         raise ToolError("Ollama returned anonymized CV JSON with an unexpected shape.")
 
     extra_keys = set(parsed) - set(REQUIRED_CV_JSON_KEYS)
-    missing_keys = [key for key in REQUIRED_CV_JSON_KEYS if key not in parsed]
-    if missing_keys or extra_keys:
-        raise ToolError("Ollama anonymized CV JSON must contain exactly the required CV sections.")
+    if extra_keys:
+        raise ToolError("Ollama anonymized CV JSON contains unexpected CV sections.")
 
     validated: dict[str, list[str]] = {}
     for key in REQUIRED_CV_JSON_KEYS:
-        value = parsed[key]
-        if not isinstance(value, list) or not value:
-            raise ToolError(f"Ollama anonymized CV JSON field '{key}' must be a non-empty list.")
+        value = parsed.get(key, [])
+        if not isinstance(value, list):
+            raise ToolError(f"Ollama anonymized CV JSON field '{key}' must be a list when provided.")
         if not all(isinstance(item, str) and item.strip() for item in value):
             raise ToolError(f"Ollama anonymized CV JSON field '{key}' must contain only non-empty strings.")
-        validated[key] = [item.strip() for item in value]
+        validated[key] = [item.strip() for item in value if not _is_not_specified_value(item)]
 
     _validate_source_aware_sections(validated, source_cv_text)
     return validated
@@ -176,12 +174,18 @@ def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
 
 
 def _is_not_specified_only(items: list[str]) -> bool:
-    return len(items) == 1 and items[0].strip().casefold() == NOT_SPECIFIED.casefold()
+    return not items or (len(items) == 1 and _is_not_specified_value(items[0]))
+
+
+def _is_not_specified_value(item: str) -> bool:
+    return item.strip().casefold() == NOT_SPECIFIED.casefold()
 
 
 def _format_cv_json_as_text(cv_json: dict[str, list[str]]) -> str:
     sections: list[str] = []
     for key in REQUIRED_CV_JSON_KEYS:
+        if not cv_json[key]:
+            continue
         lines = [f"**{SECTION_TITLES[key]}**"]
         lines.extend(f"• {item}" for item in cv_json[key])
         sections.append("\n".join(lines))
