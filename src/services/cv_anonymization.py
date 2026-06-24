@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from fastmcp.exceptions import ToolError
@@ -158,19 +157,29 @@ def _validate_source_aware_sections(cv_json: dict[str, list[str]], source_cv_tex
 
 
 def _contains_experience_information(text: str) -> bool:
-    return _matches_any(text, (r"\bexperience\b", r"\bemployment\b", r"\bwork history\b", r"\bdeveloper\b", r"\bengineer\b", r"\bmanager\b", r"\bconsultant\b"))
+    return _contains_any_term(
+        text,
+        ("experience", "employment", "work history", "developer", "engineer", "manager", "consultant"),
+    )
 
 
 def _contains_education_information(text: str) -> bool:
-    return _matches_any(text, (r"\beducation\b", r"\buniversity\b", r"\bcollege\b", r"\bdegree\b", r"\bbachelor\b", r"\bmaster\b", r"\bphd\b", r"\bdiploma\b"))
+    return _contains_any_term(
+        text,
+        ("education", "university", "college", "degree", "bachelor", "master", "phd", "diploma"),
+    )
 
 
 def _contains_skills_information(text: str) -> bool:
-    return _matches_any(text, (r"\bskills?\b", r"\bcompetenc", r"\btechnolog", r"\bpython\b", r"\bjava(script)?\b", r"\bsql\b", r"\baws\b", r"\bdocker\b"))
+    return _contains_any_term(
+        text,
+        ("skill", "skills", "competenc", "technolog", "python", "java", "javascript", "sql", "aws", "docker"),
+    )
 
 
-def _matches_any(text: str, patterns: tuple[str, ...]) -> bool:
-    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+def _contains_any_term(text: str, terms: tuple[str, ...]) -> bool:
+    normalized_text = text.casefold()
+    return any(term.casefold() in normalized_text for term in terms)
 
 
 def _is_not_specified_only(items: list[str]) -> bool:
