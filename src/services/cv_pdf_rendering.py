@@ -44,14 +44,14 @@ def render_anonymized_cv_pdf(
         _write_text_overlay(cleaned_text, overlay_path, page_width, page_height)
 
         overlay_reader = PdfReader(str(overlay_path))
-        overlay_pages = list(overlay_reader.pages)
-        logger.debug("CV PDF generated content page count: %s", len(overlay_pages))
+        overlay_pages = _deduplicate_overlay_pages(list(overlay_reader.pages))
+        logger.debug("CV PDF generated unique content page count: %s", len(overlay_pages))
         if not overlay_pages:
             raise ToolError("Generated anonymized CV overlay does not contain any pages.")
 
         writer = PdfWriter()
         for page_number, overlay_page in enumerate(overlay_pages, start=1):
-            logger.debug("CV PDF merging generated content page %s onto template page 1.", page_number)
+            logger.debug("CV PDF merging generated content page %s onto a fresh template page.", page_number)
             base_page = copy.deepcopy(template_reader.pages[0])
             base_page.merge_page(overlay_page)
             writer.add_page(base_page)
@@ -199,3 +199,30 @@ def _round_bullet_text(line: str) -> str | None:
     if not stripped_line or stripped_line[0] != ROUND_BULLET:
         return None
     return stripped_line[1:].strip()
+
+
+def _deduplicate_overlay_pages(overlay_pages: list[object]) -> list[object]:
+    """Remove duplicated overlay pages before template merging.
+
+    The ReleWant template repeats on every final page, so duplicate validation must
+    happen on generated overlay text only, before the template is merged.
+    """
+    unique_pages: list[object] = []
+    seen_page_texts: set[str] = set()
+    for overlay_page in overlay_pages:
+        normalized_text = _normalized_page_text(overlay_page)
+        if normalized_text and normalized_text in seen_page_texts:
+            logger.debug("Skipping duplicated generated CV overlay page.")
+            continue
+        if normalized_text:
+            seen_page_texts.add(normalized_text)
+        unique_pages.append(overlay_page)
+    return unique_pages
+
+
+def _normalized_page_text(page: object) -> str:
+    extract_text = getattr(page, "extract_text", None)
+    if not callable(extract_text):
+        return ""
+    text = extract_text() or ""
+    return " ".join(text.split()).casefold()
